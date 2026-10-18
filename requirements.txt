@@ -1,2 +1,5 @@
-# OpenCC is optional: fills Traditional Chinese from Simplified (zh_tw)
+# Parses the wiki infoboxes. Pinned: the package makes no backward-compatibility promise.
+bgm-tv-wiki==0.2.5
+
+# Optional: fills Traditional Chinese (zh_tw) from Simplified. Without it the index has no zh_tw.
 OpenCC

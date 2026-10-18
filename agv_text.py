@@ -1,5 +1,5 @@
 """
-agv_text.py — Pure text helpers used by main.py (which writes the index). KKAFIO's
+agv_text.py — Pure text helpers used by build_agv_index.py (which writes the index). KKAFIO's
 kkafio.cards.agv_text (which reads it) holds an identical copy — keep the two in sync so
 both sides normalise names byte-for-byte the same way (the `names` / `aliases` keys are
 norm() output).
