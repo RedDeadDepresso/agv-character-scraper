@@ -19,7 +19,11 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
 4. Series titles and characters' names are read from the dump fields and the wiki infobox
    (parsed with the bgm-tv-wiki package, see common/wiki_template.yml for the keys) in English, Japanese,
    Simplified and Traditional Chinese, together with every alias.
-5. Write assets/agv_character_index.json (version 1):
+5. VTubers: the `vtuber` entries of the VTuber database (VTUBERS_URL, fetched, not saved) are
+   appended after all the other characters, all in one series, "VTubers", with score 0 (the
+   database has no popularity). Their names come from `name` (cn / jp / en and the rest,
+   `extra` included).
+6. Write assets/agv_character_index.json (version 1):
 
   {
     "version": 1,
@@ -58,6 +62,10 @@ OUTPUT = ROOT / "assets" / "agv_character_index.json"
 LATEST_URL = "https://raw.githubusercontent.com/bangumi/Archive/refs/heads/master/aux/latest.json"
 # The gacha games the other scraper covers; subjects with one of these titles are left out.
 SERIES_URL = "https://raw.githubusercontent.com/RedDeadDepresso/gacha-character-scraper/refs/heads/main/config/series.json"
+# The VTuber database (https://github.com/dd-center/vdb); its `vtuber` entries are added last.
+VTUBERS_URL = "https://vdb.vtbs.moe/json/list.json"
+VTUBER_SERIES = "VTubers"
+VTUBER_TYPES = frozenset({"vtuber"})         # not "group" (agencies), "fan" or "misc"
 
 # The only files of the archive that are needed (the rest is skipped).
 SUBJECTS = "subject.jsonlines"
@@ -95,6 +103,12 @@ def fetch_latest() -> dict:
 def fetch_series() -> list:
     """The gacha-character-scraper's config/series.json (not saved)."""
     return fetch_json(SERIES_URL)
+
+
+def fetch_vtubers() -> list[dict]:
+    """The `vtbs` array of the VTuber database's list.json (not saved)."""
+    data = fetch_json(VTUBERS_URL)
+    return data["vtbs"] if isinstance(data, dict) else data
 
 
 def download(url: str, dest: Path, digest: str = "") -> None:
@@ -323,12 +337,37 @@ def character_names(rec: dict, s2t: Callable[[str], str] | None) -> tuple[list[s
     return [en, ja, zh, tw], [name, zh_raw, tw, *(v for _, v in items), *extra]
 
 
+def vtuber_names(rec: dict, s2t: Callable[[str], str] | None) -> tuple[list[str], list[str]]:
+    """-> (name per language [en, ja, zh_cn, zh_tw], every name / alias of the VTuber).
+
+    `name` is {"cn": ..., "jp": ..., "en": ..., "extra": [...], "default": "cn"} but the keys
+    are inconsistent ("CN", "zh-cn", "ID", ...): the known ones fill the languages, all of
+    them (and `extra`) are lookup names. "default" only names a key and is not a name."""
+    name = rec.get("name") if isinstance(rec.get("name"), dict) else {}
+    by_key: dict[str, str] = {}
+    every: list[str] = []
+    for key, value in name.items():
+        if key == "default":
+            continue
+        for v in value if isinstance(value, list) else [value]:
+            if isinstance(v, str) and v.strip():
+                every.append(v.strip())
+                if isinstance(value, str):
+                    by_key.setdefault(key.casefold(), v.strip())
+    zh = next((by_key[k] for k in ("cn", "zh-cn", "zh", "ch", "cn+") if k in by_key), "")
+    tw = s2t(zh) if s2t and zh else ""
+    per = [by_key.get("en", ""), by_key.get("jp", ""), zh, tw]
+    if not any(per) and every:
+        per[0] = every[0]
+    return per, every + ([tw] if tw else [])
+
+
 # ---------------------------------------------------------------------------
 # Index
 # ---------------------------------------------------------------------------
 
 def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
-                exclude: frozenset[str] = frozenset()) -> dict:
+                exclude: frozenset[str] = frozenset(), vtubers: list[dict] = ()) -> dict:
     subjects = select_subjects(data_dir / SUBJECTS, exclude)
     print(f"subjects (anime / games with a matching tag): {len(subjects)}")
     char_subject = first_subject_per_character(data_dir / LINKS, subjects)
@@ -365,6 +404,27 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
                 if not names.get(f) or names[f][-1] != ci:
                     names.setdefault(f, []).append(ci)
 
+    if vtubers:                                      # last: after every anime / game character
+        vi = len(series)
+        series.append([VTUBER_SERIES] * n)
+        for title in (VTUBER_SERIES, "VTuber"):
+            aliases.setdefault(norm(title), vi)
+        count = 0
+        for rec in vtubers:
+            if not isinstance(rec, dict) or rec.get("type") not in VTUBER_TYPES:
+                continue
+            per, every = vtuber_names(rec, s2t)
+            if not any(per):
+                continue
+            ci = len(chars)
+            chars.append([per_lang(per), [vi], 0])   # the database has no popularity: score 0
+            count += 1
+            for text in every:
+                for f in name_forms(text):
+                    if not names.get(f) or names[f][-1] != ci:
+                        names.setdefault(f, []).append(ci)
+        print(f"VTubers: {count}")
+
     print(f"series: {len(series)}  aliases: {len(aliases)}  characters: {len(chars)}  name keys: {len(names)}")
     return {"version": 1, "langs": langs, "series": series, "aliases": aliases,
             "chars": chars, "names": names}
@@ -375,11 +435,15 @@ def main() -> None:
         exclude = excluded_titles(fetch_series())
     except Exception as e:
         sys.exit(f"Could not fetch {SERIES_URL}: {e}")
+    try:
+        vtubers = fetch_vtubers()
+    except Exception as e:
+        sys.exit(f"Could not fetch {VTUBERS_URL}: {e}")
     update_data()
     s2t = opencc_s2t()
     if s2t is None:
         print("OpenCC is not installed: the index will have no Traditional Chinese (pip install OpenCC).")
-    index = build_index(DATA_DIR, s2t, exclude)
+    index = build_index(DATA_DIR, s2t, exclude, vtubers)
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"wrote {OUTPUT} ({OUTPUT.stat().st_size / 1e6:.2f} MB)")

@@ -177,6 +177,56 @@ def test_no_exclusion_by_default(data):
     assert sorted(main.select_subjects(data / "subject.jsonlines")) == [1, 10, 40]
 
 
+# --- VTubers --------------------------------------------------------------
+
+VTUBERS = [
+    {"uuid": "a", "type": "vtuber", "bot": False, "accounts": [],
+     "name": {"extra": ["Ina"], "cn": "一伊那尓栖", "en": "Ninomae Ina'nis", "jp": "一伊那尓栖", "default": "cn"}},
+    {"uuid": "b", "type": "vtuber", "name": {"extra": [], "cn": "晴朗蓝", "default": "cn"}},
+    {"uuid": "c", "type": "vtuber", "name": {"extra": [], "CN": "大写键", "JP": "大文字", "EN": "Upper Key", "default": "CN"}},
+    {"uuid": "d", "type": "vtuber", "name": {"extra": [], "ID": "Hololive ID", "default": "ID"}},   # unknown key only
+    {"uuid": "g", "type": "group", "name": {"extra": [], "cn": "A-SOUL", "default": "cn"}},          # an agency
+    {"uuid": "f", "type": "fan", "name": {"extra": [], "cn": "粉丝", "default": "cn"}},
+    {"uuid": "e", "type": "vtuber", "name": {"extra": [], "default": "cn"}},                          # no name
+]
+
+
+def test_vtuber_names():
+    per, every = main.vtuber_names(VTUBERS[0], t2s_like)
+    assert per == ["Ninomae Ina'nis", "一伊那尓栖", "一伊那尓栖", "一伊那尓栖"]
+    assert "cn" not in every and set(every) >= {"Ina", "Ninomae Ina'nis"}       # "default": "cn" is no name
+    assert main.vtuber_names(VTUBERS[1], None)[0] == ["", "", "晴朗蓝", ""]
+    assert main.vtuber_names(VTUBERS[2], None)[0] == ["Upper Key", "大文字", "大写键", ""]   # CN / JP / EN
+    assert main.vtuber_names(VTUBERS[3], None)[0][0] == "Hololive ID"            # first name as a fallback
+
+
+def test_vtubers_are_added_last_in_one_series(data):
+    base = main.build_index(data, t2s_like)
+    idx = main.build_index(data, t2s_like, vtubers=VTUBERS)
+    n = len(base["chars"])
+    assert idx["chars"][:n] == base["chars"] and idx["series"][:-1] == base["series"]
+    assert idx["series"][-1] == ["VTubers"] * 4
+    added = idx["chars"][n:]
+    assert len(added) == 4                                      # 3 named vtubers + the unknown-key one
+    assert all(c[1] == [len(idx["series"]) - 1] and c[2] == 0 for c in added)
+    assert idx["aliases"][norm("VTubers")] == idx["aliases"][norm("vtuber")] == len(idx["series"]) - 1
+
+
+def test_vtuber_lookup_names_come_after_existing_matches(data):
+    idx = main.build_index(data, t2s_like, vtubers=VTUBERS + [
+        {"type": "vtuber", "name": {"extra": [], "en": "Tidus", "default": "en"}}])
+    hits = idx["names"][norm("Tidus")]
+    assert [idx["chars"][i][2] for i in hits] == [777, 0]       # the game character, then the VTuber
+    ina = idx["names"][norm("Ninomae Inanis")]                    # punctuation-insensitive
+    assert idx["chars"][ina[0]][0][0] == "Ninomae Ina'nis"
+    assert idx["names"][norm("Ina")] == ina
+
+
+def test_no_vtubers_by_default(data):
+    idx = main.build_index(data, t2s_like)
+    assert "VTubers" not in [s[0] for s in idx["series"]]
+
+
 # --- helpers ---------------------------------------------------------------
 
 def test_name_helpers():

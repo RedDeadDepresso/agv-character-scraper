@@ -24,7 +24,11 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
 3. gives each of their characters the subject with the lowest id as its series;
 4. reads the Japanese, Chinese and English names and aliases of the series and the characters
    (wiki infoboxes are parsed with [`bgm-tv-wiki`](https://pypi.org/project/bgm-tv-wiki/));
-5. writes `assets/agv_character_index.json`.
+5. appends the VTubers: the `vtuber` entries of the
+   [VTuber database](https://vdb.vtbs.moe/json/list.json) (fetched every run, not saved; `group`,
+   `fan` and `misc` entries are skipped) come after all the other characters, all in one series,
+   `VTubers`, with score 0 because the database has no popularity;
+6. writes `assets/agv_character_index.json`.
 
 The format is described at the top of `main.py`.
 
