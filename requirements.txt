@@ -1,0 +1,2 @@
+# OpenCC is optional: fills Traditional Chinese from Simplified (zh_tw)
+OpenCC
