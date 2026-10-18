@@ -28,19 +28,19 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
    [VTuber database](https://vdb.vtbs.moe/json/list.json) (fetched every run, not saved; `group`,
    `fan` and `misc` entries are skipped) come after all the other characters, all in one series,
    `VTubers`, with score 0 because the database has no popularity;
-6. writes `assets/agv_character_index.json`.
+6. writes `agv_character_index.json`.
 
 The format is described at the top of `main.py`.
 
 ## Published file
 
-`assets/agv_character_index.json` is served by GitHub Pages:
+`agv_character_index.json` is served by GitHub Pages:
 
-    https://reddeaddepresso.github.io/agv-character-scraper/assets/agv_character_index.json
+    https://reddeaddepresso.github.io/agv-character-scraper/agv_character_index.json
 
 KKAFIO checks `https://api.github.com/repos/RedDeadDepresso/agv-character-scraper/commits` and
 downloads the file again only when the latest commit changed, so **commit the new
-`assets/agv_character_index.json` after every run**.
+`agv_character_index.json` after every run**.
 
 ## Keep in sync with KKAFIO
 

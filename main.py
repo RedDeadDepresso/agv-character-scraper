@@ -23,7 +23,7 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
    appended after all the other characters, all in one series, "VTubers", with score 0 (the
    database has no popularity). Their names come from `name` (cn / jp / en and the rest,
    `extra` included).
-6. Write assets/agv_character_index.json (version 1):
+6. Write agv_character_index.json (version 1):
 
   {
     "version": 1,
@@ -57,7 +57,7 @@ from bgm_tv_wiki import try_parse
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"                      # the extracted .jsonlines files
 LATEST_FILE = ROOT / "latest.json"           # the release the files in data/ come from
-OUTPUT = ROOT / "assets" / "agv_character_index.json"
+OUTPUT = ROOT / "agv_character_index.json"
 
 LATEST_URL = "https://raw.githubusercontent.com/bangumi/Archive/refs/heads/master/aux/latest.json"
 # The gacha games the other scraper covers; subjects with one of these titles are left out.
@@ -444,7 +444,6 @@ def main() -> None:
     if s2t is None:
         print("OpenCC is not installed: the index will have no Traditional Chinese (pip install OpenCC).")
     index = build_index(DATA_DIR, s2t, exclude, vtubers)
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"wrote {OUTPUT} ({OUTPUT.stat().st_size / 1e6:.2f} MB)")
 
