@@ -14,14 +14,16 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
    Subjects that appear in series.json (SERIES_URL, fetched, not saved) are left out: those
    with a name, title or alias equal to a game / title / alias there (compared with norm()).
 3. Characters (subject-characters.jsonlines): keep the links to those subjects. A character
-   linked to several of them keeps only the one with the lowest subject id (the original
-   work, not a sequel). The kept subjects are the series of the index.
+   linked to several of them keeps only the earliest released one (the subject's `date`; the
+   lowest subject id on a tie or without a date): the original work, not a sequel or an
+   adaptation. The kept subjects are the series of the index.
 4. Series titles and characters' names are read from the dump fields and the wiki infobox
    (parsed with the bgm-tv-wiki package, see common/wiki_template.yml for the keys) in English, Japanese,
    Simplified and Traditional Chinese, together with every alias.
 5. English titles: a series with no English title (Bangumi often has none) gets the one of
    the bangumi-data entry that has its Bangumi subject id (`sites`), or else the entry whose
-   original title equals its Japanese title (compared with norm()). If that finds none,
+   original title equals its Japanese title (compared with norm()); bangumi-data lists anime
+   only, so this is done for animation subjects, not games. If that finds none,
    the longest Latin-script alias of the subject is used. data/data.json is downloaded from BANGUMI_DATA_URL when the latest commit of the
    bangumi-data repo differs from the one in bangumi_data_last_commit.txt (project root) or
    the file is missing. The English title is also an alias of the series.
@@ -100,6 +102,7 @@ NEEDED = (SUBJECTS, LINKS, CHARACTERS)
 
 # Subject types (common/subject_platforms.yml): 2 anime, 4 game.
 SUBJECT_TYPES = frozenset({2, 4})
+ANIME = 2                                     # bangumi-data only lists anime
 # A subject is kept if one of its tags / meta_tags is one of these (case-insensitive).
 TAGS = frozenset({"visual novel", "视觉小说", "japan", "日本", "jrpg"})
 
@@ -324,13 +327,28 @@ def select_subjects(path: Path, exclude: frozenset[str] = frozenset()) -> dict[i
     return out
 
 
+def release_key(rec: dict, sid: int) -> tuple[str, int]:
+    """Sort key for "the original work": the earlier release date first (the `date` of the
+    dump, "YYYY-MM-DD"; a subject without one sorts after the dated ones), then the lower id."""
+    date = str(rec.get("date") or "").strip()
+    return (date if re.match(r"\d{4}", date) else "9999", sid)
+
+
 def first_subject_per_character(path: Path, subjects: dict[int, dict]) -> dict[int, int]:
-    """character id -> lowest id among the kept subjects it appears in."""
+    """character id -> the earliest released of the kept subjects it appears in (lowest id
+    on a tie), i.e. the game rather than its anime adaptation."""
+    keys = {sid: release_key(rec, sid) for sid, rec in subjects.items()}
     best: dict[int, int] = {}
+    lowest: dict[int, int] = {}
     for rec in read_jsonl(path):
         sid, cid = _int(rec.get("subject_id")), _int(rec.get("character_id"))
-        if sid in subjects and cid and (cid not in best or sid < best[cid]):
-            best[cid] = sid
+        if sid in subjects and cid:
+            if cid not in best or keys[sid] < keys[best[cid]]:
+                best[cid] = sid
+            if cid not in lowest or sid < lowest[cid]:
+                lowest[cid] = sid
+    moved = sum(1 for cid, sid in best.items() if sid != lowest[cid])
+    print(f"characters whose subject is not the lowest id but the earliest release: {moved}")
     return best
 
 
@@ -520,7 +538,9 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
     english_by = [0, 0, 0]                           # English titles found by id / by title / from an alias
     for sid, i in series_idx.items():                # ascending id: the oldest work keeps a clash
         titles, every = subject_titles(subjects[sid], s2t)
-        if english and not titles[0]:                # Bangumi has no English title: ask bangumi-data
+        if english and not titles[0] and _int(subjects[sid].get("type")) == ANIME:
+            # Bangumi has no English title: ask bangumi-data. Anime only: a game must not take the
+            # title of its anime adaptation, which often has the same Japanese title.
             by_id, by_title = english
             en = by_id.get(sid, "")
             if en:

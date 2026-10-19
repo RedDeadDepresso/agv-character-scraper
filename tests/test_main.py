@@ -75,10 +75,35 @@ def test_subject_selection(data):
     assert sorted(main.select_subjects(data / "subject.jsonlines")) == [1, 10, 40]
 
 
-def test_character_keeps_lowest_subject_id(data):
+def test_character_keeps_lowest_subject_id_without_dates(data):
     subjects = main.select_subjects(data / "subject.jsonlines")
     assert main.first_subject_per_character(data / "subject-characters.jsonlines", subjects) == {
         100: 1, 103: 10, 104: 40}
+
+
+def test_character_keeps_the_earliest_released_subject(tmp_path):
+    tag = [{"name": "JRPG", "count": 1}]
+    (tmp_path / "subject.jsonlines").write_text(jl(
+        {"id": 15489, "type": 2, "name": "Persona 4 the Animation", "date": "2011-10-06", "tags": tag},   # lower id...
+        {"id": 20000, "type": 4, "name": "Persona 4", "date": "2008-07-10", "tags": tag},                 # ...but released first
+        {"id": 7, "type": 4, "name": "Undated", "tags": tag},
+        {"id": 8, "type": 4, "name": "Bare year", "date": "2009", "tags": tag},
+        {"id": 9, "type": 4, "name": "Bad date", "date": "n/a", "tags": tag},
+    ), encoding="utf-8")
+    (tmp_path / "links.jsonlines").write_text(jl(
+        {"character_id": 1, "subject_id": 15489}, {"character_id": 1, "subject_id": 20000},   # game wins
+        {"character_id": 2, "subject_id": 7}, {"character_id": 2, "subject_id": 15489},       # a dated subject beats an undated one
+        {"character_id": 3, "subject_id": 9}, {"character_id": 3, "subject_id": 7},           # none dated: lowest id
+        {"character_id": 4, "subject_id": 20000}, {"character_id": 4, "subject_id": 8},       # 2008-07-10 < 2009
+    ), encoding="utf-8")
+    subjects = main.select_subjects(tmp_path / "subject.jsonlines")
+    assert main.first_subject_per_character(tmp_path / "links.jsonlines", subjects) == {1: 20000, 2: 15489, 3: 7, 4: 20000}
+
+
+def test_release_key():
+    assert main.release_key({"date": "2008-07-10"}, 5) < main.release_key({"date": "2011-10-06"}, 1)
+    assert main.release_key({"date": "2008-07-10"}, 5) < main.release_key({}, 1)            # undated sorts last
+    assert main.release_key({"date": "2008-07-10"}, 1) < main.release_key({"date": "2008-07-10"}, 2)   # tie: id
 
 
 # --- index -----------------------------------------------------------------
@@ -315,6 +340,24 @@ def test_bangumi_data_beats_a_latin_alias(tmp_path):
     (tmp_path / "character.jsonlines").write_text(jl({"id": 1, "name": "A", "infobox": ""}), encoding="utf-8")
     idx = main.build_index(tmp_path, None, english=({1: "Cowboy Bebop"}, {}))
     assert idx["series"][0][0] == "Cowboy Bebop"
+
+
+def test_a_game_does_not_take_the_english_title_of_its_anime(tmp_path):
+    tag = [{"name": "JRPG", "count": 1}]
+    (tmp_path / "subject.jsonlines").write_text(jl(
+        {"id": 8000, "type": 4, "name": "ペルソナ4", "name_cn": "女神异闻录4", "tags": tag, "infobox": ""},   # the game
+        {"id": 15489, "type": 2, "name": "ペルソナ4", "name_cn": "女神异闻录4 动画版", "tags": tag, "infobox": ""},  # the anime
+    ), encoding="utf-8")
+    (tmp_path / "subject-characters.jsonlines").write_text(
+        jl({"character_id": 1, "subject_id": 8000}, {"character_id": 2, "subject_id": 15489}), encoding="utf-8")
+    (tmp_path / "character.jsonlines").write_text(
+        jl({"id": 1, "name": "A", "infobox": ""}, {"id": 2, "name": "B", "infobox": ""}), encoding="utf-8")
+    items = [{"title": "ペルソナ4", "titleTranslate": {"en": ["PERSONA 4 the ANIMATION"]},
+              "sites": [{"site": "bangumi", "id": "15489"}]}]                      # bangumi-data: anime only
+    idx = main.build_index(tmp_path, None, english=main.english_titles(items))
+    by_cn = {s[2]: s[0] for s in idx["series"]}
+    assert by_cn["女神异闻录4"] == ""                                              # the game: not the anime's title
+    assert by_cn["女神异闻录4 动画版"] == "PERSONA 4 the ANIMATION"                 # the anime itself still gets it
 
 
 def test_nothing_changes_without_bangumi_data(jp_data):

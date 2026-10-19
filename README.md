@@ -21,14 +21,15 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
    [`config/series.json`](https://raw.githubusercontent.com/RedDeadDepresso/gacha-character-scraper/refs/heads/main/config/series.json)
    (fetched every run, not saved): a subject is left out when one of its names, titles or
    aliases equals a game, title or alias there;
-3. gives each of their characters the subject with the lowest id as its series;
+3. gives each of their characters the earliest released of those subjects as its series (the
+   subject's `date`, then the lowest id), so a game wins over its anime adaptation;
 4. reads the Japanese, Chinese and English names and aliases of the series and the characters
    (wiki infoboxes are parsed with [`bgm-tv-wiki`](https://pypi.org/project/bgm-tv-wiki/)).
    A series Bangumi has no English title for gets one from
    [bangumi-data](https://github.com/bangumi-data/bangumi-data): the entry of its
    [`dist/data.json`](https://raw.githubusercontent.com/bangumi-data/bangumi-data/refs/heads/master/dist/data.json)
    that lists the series' Bangumi subject id (`sites`), or else the one whose original title
-   equals the series' Japanese title. `data/data.json` is downloaded again
+   equals the series' Japanese title. bangumi-data only lists anime, so games are left out of this step. `data/data.json` is downloaded again
    only when the repo's latest commit differs from the one saved in
    `bangumi_data_last_commit.txt` (project root) or the file is missing;
 5. gives the characters Bangumi has no English name for one from the
