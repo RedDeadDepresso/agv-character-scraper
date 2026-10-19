@@ -289,6 +289,34 @@ def test_series_without_english_gets_it_by_id_then_by_title(jp_data):
     assert idx["aliases"][norm("Found By Id")] == i                     # and it is an alias
 
 
+def test_latin_alias_is_the_last_resort_for_the_english_title(tmp_path):
+    tag = [{"name": "日本", "count": 1}]
+    (tmp_path / "subject.jsonlines").write_text(jl(
+        # the English title is a plain alias (no 英文名 key); the initialism must not win
+        {"id": 1, "type": 2, "name": "カウボーイビバップ", "name_cn": "星际牛仔", "tags": tag,
+         "infobox": "{{Infobox animanga/TVAnime\n|别名={\n[CB]\n[Cowboy Bebop]\n[牛仔]\n}\n}}"},
+        {"id": 2, "type": 2, "name": "別作品", "tags": tag, "infobox": "{{Infobox animanga/TVAnime\n|别名={\n[AB]\n}\n}}"},
+    ), encoding="utf-8")
+    (tmp_path / "subject-characters.jsonlines").write_text(
+        jl({"character_id": 1, "subject_id": 1}, {"character_id": 2, "subject_id": 2}), encoding="utf-8")
+    (tmp_path / "character.jsonlines").write_text(
+        jl({"id": 1, "name": "A", "infobox": ""}, {"id": 2, "name": "B", "infobox": ""}), encoding="utf-8")
+    idx = main.build_index(tmp_path, None)
+    assert [s[0] for s in idx["series"]] == ["Cowboy Bebop", ""]       # no 3-letter alias for the second one
+    assert idx["aliases"][norm("Cowboy Bebop")] == 0
+
+
+def test_bangumi_data_beats_a_latin_alias(tmp_path):
+    tag = [{"name": "日本", "count": 1}]
+    (tmp_path / "subject.jsonlines").write_text(jl(
+        {"id": 1, "type": 2, "name": "カウボーイビバップ", "tags": tag,
+         "infobox": "{{Infobox animanga/TVAnime\n|别名={\n[Cowboy Bebop (alias)]\n}\n}}"}), encoding="utf-8")
+    (tmp_path / "subject-characters.jsonlines").write_text(jl({"character_id": 1, "subject_id": 1}), encoding="utf-8")
+    (tmp_path / "character.jsonlines").write_text(jl({"id": 1, "name": "A", "infobox": ""}), encoding="utf-8")
+    idx = main.build_index(tmp_path, None, english=({1: "Cowboy Bebop"}, {}))
+    assert idx["series"][0][0] == "Cowboy Bebop"
+
+
 def test_nothing_changes_without_bangumi_data(jp_data):
     assert [s[0] for s in main.build_index(jp_data, None)["series"]] == ["", "Has English", "", "", ""]
 

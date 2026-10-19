@@ -21,7 +21,8 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
    Simplified and Traditional Chinese, together with every alias.
 5. English titles: a series with no English title (Bangumi often has none) gets the one of
    the bangumi-data entry that has its Bangumi subject id (`sites`), or else the entry whose
-   original title equals its Japanese title (compared with norm()). data/data.json is downloaded from BANGUMI_DATA_URL when the latest commit of the
+   original title equals its Japanese title (compared with norm()). If that finds none,
+   the longest Latin-script alias of the subject is used. data/data.json is downloaded from BANGUMI_DATA_URL when the latest commit of the
    bangumi-data repo differs from the one in bangumi_data_last_commit.txt (project root) or
    the file is missing. The English title is also an alias of the series.
 6. English character names: a character with no English name gets the one of the MAL
@@ -434,6 +435,11 @@ def opencc_s2t() -> Callable[[str], str] | None:
         return OpenCC("s2t.json").convert
 
 
+def _latin_title(text: str) -> bool:
+    """Text with no CJK that has at least 3 letters (so not an initialism like "CB")."""
+    return bool(text) and not _CJK.search(text) and sum(c.isalpha() for c in text) >= 3
+
+
 def subject_titles(rec: dict, s2t: Callable[[str], str] | None) -> tuple[list[str], list[str]]:
     """-> (title per language [en, ja, zh_cn, zh_tw], every title / alias of the subject)."""
     wiki = try_parse(rec.get("infobox") or "")
@@ -511,7 +517,7 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
     series_idx = {sid: i for i, sid in enumerate(sorted(set(char_subject.values())))}
     series: list[list[str]] = [[]] * len(series_idx)
     aliases: dict[str, int] = {}
-    english_by = [0, 0]                              # English titles found by id / by title
+    english_by = [0, 0, 0]                           # English titles found by id / by title / from an alias
     for sid, i in series_idx.items():                # ascending id: the oldest work keeps a clash
         titles, every = subject_titles(subjects[sid], s2t)
         if english and not titles[0]:                # Bangumi has no English title: ask bangumi-data
@@ -526,6 +532,9 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
             if en:
                 titles[0] = en
                 every.append(en)
+        if not titles[0]:                            # still none: a Latin-script alias (the longest, so a
+            titles[0] = max((t for t in every if _latin_title(t)), key=len, default="")   # full title beats "SAO")
+            english_by[2] += bool(titles[0])
         series[i] = per_lang(titles)
         for t in every:
             if key := norm(t):
@@ -553,7 +562,8 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
 
     if english is not None:
         print(f"English series titles from bangumi-data: {english_by[0]} by subject id, "
-              f"{english_by[1]} by Japanese title, {sum(1 for t in series if not t[0])} series still without one")
+              f"{english_by[1]} by Japanese title, {english_by[2]} from a Latin alias, "
+              f"{sum(1 for t in series if not t[0])} series still without one")
     if english_names is not None:
         print(f"English character names from the MAL dataset: {english_chars} added, "
               f"{sum(1 for c in chars if not c[0][0])} characters still without one")
