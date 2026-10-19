@@ -23,12 +23,25 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
    aliases equals a game, title or alias there;
 3. gives each of their characters the subject with the lowest id as its series;
 4. reads the Japanese, Chinese and English names and aliases of the series and the characters
-   (wiki infoboxes are parsed with [`bgm-tv-wiki`](https://pypi.org/project/bgm-tv-wiki/));
-5. appends the VTubers: the `vtuber` entries of the
+   (wiki infoboxes are parsed with [`bgm-tv-wiki`](https://pypi.org/project/bgm-tv-wiki/)).
+   A series Bangumi has no English title for gets one from
+   [bangumi-data](https://github.com/bangumi-data/bangumi-data): the entry of its
+   [`dist/data.json`](https://raw.githubusercontent.com/bangumi-data/bangumi-data/refs/heads/master/dist/data.json)
+   that lists the series' Bangumi subject id (`sites`), or else the one whose original title
+   equals the series' Japanese title. `data/data.json` is downloaded again
+   only when the repo's latest commit differs from the one saved in
+   `bangumi_data_last_commit.txt` (project root) or the file is missing;
+5. gives the characters Bangumi has no English name for one from the
+   [MyAnimeList characters dataset](https://www.kaggle.com/datasets/syahrulapriansyah2/anime-characters):
+   a row whose `alternate_name` (Japanese) equals the character's Japanese name provides the
+   `name` ("Last, First"). Japanese names that several rows share with different English names are
+   not used. The archive is downloaded only if `data/mal_characters_detailed.csv` is missing; only
+   that csv is extracted and the archive is deleted;
+6. appends the VTubers: the `vtuber` entries of the
    [VTuber database](https://vdb.vtbs.moe/json/list.json) (fetched every run, not saved; `group`,
    `fan` and `misc` entries are skipped) come after all the other characters, all in one series,
    `VTubers`, with score 0 because the database has no popularity;
-6. writes `agv_character_index.json`.
+7. writes `agv_character_index.json`.
 
 The format is described at the top of `main.py`.
 

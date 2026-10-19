@@ -227,6 +227,231 @@ def test_no_vtubers_by_default(data):
     assert "VTubers" not in [s[0] for s in idx["series"]]
 
 
+# --- English series titles from bangumi-data ------------------------------
+
+BANGUMI_DATA = {"siteMeta": {}, "items": [
+    # matched by title only (no bangumi site)
+    {"title": "魔法少女まどか☆マギカ", "titleTranslate": {"zh-Hans": ["魔法少女小圆"],
+                                                    "en": ["Puella Magi Madoka Magica", "Madoka"]}, "sites": []},
+    {"title": "名前のない作品", "titleTranslate": {"zh-Hans": ["无名"]}, "sites": []},          # no English title
+    {"title": "英語あり", "titleTranslate": {"en": ["Other English Title"]},
+     "sites": [{"site": "bangumi", "id": "51"}]},
+    # the spelling differs from Bangumi's, so only the id finds it
+    {"title": "別の表記のタイトル", "titleTranslate": {"en": ["Found By Id"]},
+     "sites": [{"site": "annict", "id": "9"}, {"site": "bangumi", "id": "53"}]},
+    # same title as subject 54's, but its id says it is another subject: the id wins
+    {"title": "同じタイトル", "titleTranslate": {"en": ["Wrong Entry"]}, "sites": [{"site": "bangumi", "id": "999"}]},
+    {"title": "同じタイトルの別物", "titleTranslate": {"en": ["Right Entry"]}, "sites": [{"site": "bangumi", "id": "54"}]},
+    {"nonsense": True}, "junk",
+]}
+
+
+@pytest.fixture
+def jp_data(tmp_path):
+    (tmp_path / "subject.jsonlines").write_text(jl(
+        {"id": 50, "type": 2, "name": "魔法少女まどか☆マギカ", "name_cn": "魔法少女小圆", "infobox": "",
+         "tags": [{"name": "日本", "count": 1}]},
+        {"id": 51, "type": 2, "name": "英語あり", "infobox": "{{Infobox animanga/TVAnime\n|别名={\n[英文名|Has English]\n}\n}}",
+         "tags": [{"name": "日本", "count": 1}]},
+        {"id": 52, "type": 2, "name": "名前のない作品", "infobox": "", "tags": [{"name": "日本", "count": 1}]},
+        {"id": 53, "type": 2, "name": "ID違いのタイトル", "infobox": "", "tags": [{"name": "日本", "count": 1}]},
+        {"id": 54, "type": 2, "name": "同じタイトル", "infobox": "", "tags": [{"name": "日本", "count": 1}]},
+    ), encoding="utf-8")
+    (tmp_path / "subject-characters.jsonlines").write_text(jl(
+        {"character_id": 500, "subject_id": 50}, {"character_id": 501, "subject_id": 51},
+        {"character_id": 502, "subject_id": 52}, {"character_id": 503, "subject_id": 53},
+        {"character_id": 504, "subject_id": 54}), encoding="utf-8")
+    (tmp_path / "character.jsonlines").write_text(jl(
+        {"id": 500, "name": "鹿目 まどか", "collects": 9, "infobox": ""},
+        {"id": 501, "name": "A", "collects": 1, "infobox": ""},
+        {"id": 502, "name": "B", "collects": 1, "infobox": ""},
+        {"id": 503, "name": "C", "collects": 1, "infobox": ""},
+        {"id": 504, "name": "D", "collects": 1, "infobox": ""}), encoding="utf-8")
+    return tmp_path
+
+
+def test_english_titles_lookups():
+    by_id, by_title = main.english_titles(BANGUMI_DATA["items"])
+    assert by_id == {51: "Other English Title", 53: "Found By Id", 999: "Wrong Entry", 54: "Right Entry"}
+    assert by_title[norm("魔法少女まどか☆マギカ")] == "Puella Magi Madoka Magica"   # first English title
+    assert norm("名前のない作品") not in by_title                                    # no English title
+
+
+def test_series_without_english_gets_it_by_id_then_by_title(jp_data):
+    idx = main.build_index(jp_data, None, english=main.english_titles(BANGUMI_DATA["items"]))
+    en = {s[1]: s[0] for s in idx["series"]}
+    assert en["魔法少女まどか☆マギカ"] == "Puella Magi Madoka Magica"   # by title
+    assert en["ID違いのタイトル"] == "Found By Id"                      # by subject id, titles differ
+    assert en["同じタイトル"] == "Right Entry"                          # the id beats the title match
+    assert en["英語あり"] == "Has English"                              # Bangumi's own English is kept
+    assert en["名前のない作品"] == ""                                    # nothing to find: stays empty
+    i = next(i for i, s in enumerate(idx["series"]) if s[1] == "ID違いのタイトル")
+    assert idx["aliases"][norm("Found By Id")] == i                     # and it is an alias
+
+
+def test_nothing_changes_without_bangumi_data(jp_data):
+    assert [s[0] for s in main.build_index(jp_data, None)["series"]] == ["", "Has English", "", "", ""]
+
+
+# --- English character names from the MAL dataset --------------------------
+
+MAL_CSV = (
+    "character_id,name,alternate_name,about\n"
+    '1,"Kaname, Madoka",鹿目 まどか,"multi-line\nabout, with a comma"\n'
+    '2,"Spiegel, Spike",スパイク・スピーゲル,\n'
+    '3,"Ein",アイン,\n'
+    '4,"Eins",アイン,\n'                               # same Japanese name, different English: ambiguous
+    '5,"Dup, Same",重複,\n'
+    '6,"Dup, Same",重複,\n'                            # same English twice: not ambiguous
+    '7,"No Alt",,\n'
+    '8,,名前なし,\n'                                   # no English name
+    '9,"Reversed, Name",名前 逆,\n'
+)
+
+
+@pytest.fixture
+def mal_csv(tmp_path):
+    f = tmp_path / "mal_characters_detailed.csv"
+    f.write_text(MAL_CSV, encoding="utf-8")
+    return f
+
+
+def test_read_english_names(mal_csv):
+    t = main.read_english_names(mal_csv)
+    assert t[norm("鹿目まどか")] == "Kaname, Madoka"                   # norm ignores the space
+    assert t[norm("スパイク・スピーゲル")] == "Spiegel, Spike"
+    assert t[norm("重複")] == "Dup, Same"
+    assert norm("アイン") not in t                                       # ambiguous: left out
+    assert norm("名前なし") not in t and len(t) == 4
+
+
+def test_english_name_tries_both_orders(mal_csv):
+    t = main.read_english_names(mal_csv)
+    assert main.english_name("鹿目 まどか", t) == "Kaname, Madoka"
+    assert main.english_name("逆 名前", t) == "Reversed, Name"            # dataset has the other order
+    assert main.english_name("誰か 知らない", t) == ""
+
+
+def test_characters_without_english_get_it_from_the_mal_dataset(jp_data, mal_csv):
+    table = main.read_english_names(mal_csv)
+    idx = main.build_index(jp_data, None, english_names=table)
+    madoka = next(c for c in idx["chars"] if c[2] == 9)
+    assert madoka[0][:2] == ["Kaname, Madoka", "鹿目, まどか"]
+    assert madoka[0][0] and next(c for c in idx["chars"] if c[2] == 1)[0][0] == "A"   # Latin names untouched
+    assert idx["chars"].index(madoka) in idx["names"][norm("Kaname Madoka")]          # found by English too
+    assert idx["chars"].index(madoka) in idx["names"][norm("Madoka Kaname")]
+
+
+def test_existing_english_names_are_not_replaced(data):
+    # character 100 already has "Tousaka, Rin" (romaji) in Bangumi
+    idx = main.build_index(data, t2s_like, english_names={norm("遠坂凛"): "Wrong, Name"})
+    assert next(c for c in idx["chars"] if c[2] == 5000)[0][0] == "Tousaka, Rin"
+
+
+def test_no_english_names_without_the_dataset(jp_data):
+    assert next(c for c in main.build_index(jp_data, None)["chars"] if c[2] == 9)[0][0] == ""
+
+
+@pytest.fixture
+def kaggle(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DATA_DIR", tmp_path / "data")
+    st = {"downloads": 0, "members": {"anime-characters/mal_characters_detailed.csv": MAL_CSV,
+                                      "anime-characters/other.csv": "x\n"}}
+
+    def fake_download(url, dest, digest=""):
+        assert url == main.MAL_URL
+        st["downloads"] += 1
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(dest, "w") as z:
+            for name, text in st["members"].items():
+                z.writestr(name, text)
+
+    monkeypatch.setattr(main, "download", fake_download)
+    return st
+
+
+def test_mal_dataset_downloaded_extracted_and_archive_deleted(kaggle):
+    path = main.update_mal_dataset()
+    assert path == main.DATA_DIR / "mal_characters_detailed.csv" and path.read_text(encoding="utf-8") == MAL_CSV
+    assert [p.name for p in main.DATA_DIR.iterdir()] == ["mal_characters_detailed.csv"]   # only the csv
+
+
+def test_mal_dataset_download_skipped_when_the_csv_exists(kaggle):
+    main.update_mal_dataset()
+    main.update_mal_dataset()
+    assert kaggle["downloads"] == 1
+
+
+def test_mal_dataset_failures_stop_and_leave_nothing_behind(kaggle):
+    kaggle["members"] = {"other.csv": "x\n"}                       # the csv is not in the archive
+    with pytest.raises(SystemExit):
+        main.update_mal_dataset()
+    assert list(main.DATA_DIR.iterdir()) == []                       # no archive, no .part, no csv
+
+
+# --- data.json download / commit check --------------------------------------
+
+@pytest.fixture
+def bdata(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(main, "BANGUMI_COMMIT_FILE", tmp_path / "bangumi_data_last_commit.txt")
+    st = {"sha": "aaa111bbb", "downloads": 0}
+
+    def fake_json(url):
+        assert url == main.BANGUMI_DATA_COMMITS_URL
+        if st["sha"] is None:
+            raise OSError("offline")
+        return [{"sha": st["sha"]}]
+
+    def fake_download(url, dest, digest=""):
+        assert url == main.BANGUMI_DATA_URL
+        st["downloads"] += 1
+        dest.write_text(json.dumps(BANGUMI_DATA), encoding="utf-8")
+
+    monkeypatch.setattr(main, "fetch_json", fake_json)
+    monkeypatch.setattr(main, "download", fake_download)
+    return st
+
+
+def test_bangumi_data_downloaded_and_commit_saved_in_root(bdata):
+    path = main.update_bangumi_data()
+    assert path == main.DATA_DIR / "data.json" and json.loads(path.read_text(encoding="utf-8")) == BANGUMI_DATA
+    assert main.BANGUMI_COMMIT_FILE.read_text(encoding="utf-8") == "aaa111bbb"
+    assert [p.name for p in main.DATA_DIR.iterdir()] == ["data.json"]                # no .part left
+
+
+def test_bangumi_data_skipped_unless_commit_changed_or_file_missing(bdata):
+    main.update_bangumi_data()
+    main.update_bangumi_data()
+    assert bdata["downloads"] == 1                       # same commit
+    bdata["sha"] = "ccc222ddd"
+    main.update_bangumi_data()
+    assert bdata["downloads"] == 2 and main.BANGUMI_COMMIT_FILE.read_text(encoding="utf-8") == "ccc222ddd"
+    (main.DATA_DIR / "data.json").unlink()
+    main.update_bangumi_data()
+    assert bdata["downloads"] == 3                       # same commit, but the file was gone
+
+
+def test_bangumi_data_offline_uses_the_existing_file_or_stops(bdata):
+    bdata["sha"] = None
+    with pytest.raises(SystemExit):
+        main.update_bangumi_data()                       # nothing to fall back on
+    bdata["sha"] = "aaa111bbb"
+    main.update_bangumi_data()
+    bdata["sha"] = None
+    assert main.update_bangumi_data().exists() and bdata["downloads"] == 1
+
+
+def test_bad_download_keeps_the_old_file_and_commit(bdata, monkeypatch):
+    main.update_bangumi_data()
+    bdata["sha"] = "ccc222ddd"
+    monkeypatch.setattr(main, "download", lambda url, dest, digest="": dest.write_text("<html>", encoding="utf-8"))
+    path = main.update_bangumi_data()                    # warns, keeps using the old file
+    assert json.loads(path.read_text(encoding="utf-8")) == BANGUMI_DATA
+    assert main.BANGUMI_COMMIT_FILE.read_text(encoding="utf-8") == "aaa111bbb"      # retried next run
+    assert not (main.DATA_DIR / "data.json.part").exists()
+
+
 # --- helpers ---------------------------------------------------------------
 
 def test_name_helpers():

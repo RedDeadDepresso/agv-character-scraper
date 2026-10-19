@@ -19,11 +19,21 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
 4. Series titles and characters' names are read from the dump fields and the wiki infobox
    (parsed with the bgm-tv-wiki package, see common/wiki_template.yml for the keys) in English, Japanese,
    Simplified and Traditional Chinese, together with every alias.
-5. VTubers: the `vtuber` entries of the VTuber database (VTUBERS_URL, fetched, not saved) are
+5. English titles: a series with no English title (Bangumi often has none) gets the one of
+   the bangumi-data entry that has its Bangumi subject id (`sites`), or else the entry whose
+   original title equals its Japanese title (compared with norm()). data/data.json is downloaded from BANGUMI_DATA_URL when the latest commit of the
+   bangumi-data repo differs from the one in bangumi_data_last_commit.txt (project root) or
+   the file is missing. The English title is also an alias of the series.
+6. English character names: a character with no English name gets the one of the MAL
+   dataset's row whose `alternate_name` (Japanese) equals its Japanese name (compared with
+   norm(), both orders of a two-part name); names shared by differently named rows are not
+   used. The Kaggle archive is downloaded into data/ only if data/mal_characters_detailed.csv
+   is missing; only that csv is extracted and the archive is deleted.
+7. VTubers: the `vtuber` entries of the VTuber database (VTUBERS_URL, fetched, not saved) are
    appended after all the other characters, all in one series, "VTubers", with score 0 (the
    database has no popularity). Their names come from `name` (cn / jp / en and the rest,
    `extra` included).
-6. Write agv_character_index.json (version 1):
+8. Write agv_character_index.json (version 1):
 
   {
     "version": 1,
@@ -43,7 +53,9 @@ KKAFIO falls back to another language. "zh_tw" comes from the Simplified text th
 from __future__ import annotations
 
 import hashlib
+import csv
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -57,6 +69,7 @@ from bgm_tv_wiki import try_parse
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"                      # the extracted .jsonlines files
 LATEST_FILE = ROOT / "latest.json"           # the release the files in data/ come from
+BANGUMI_COMMIT_FILE = ROOT / "bangumi_data_last_commit.txt"   # commit data/data.json comes from
 OUTPUT = ROOT / "agv_character_index.json"
 
 LATEST_URL = "https://raw.githubusercontent.com/bangumi/Archive/refs/heads/master/aux/latest.json"
@@ -66,6 +79,17 @@ SERIES_URL = "https://raw.githubusercontent.com/RedDeadDepresso/gacha-character-
 VTUBERS_URL = "https://vdb.vtbs.moe/json/list.json"
 VTUBER_SERIES = "VTubers"
 VTUBER_TYPES = frozenset({"vtuber"})         # not "group" (agencies), "fan" or "misc"
+# bangumi-data (https://github.com/bangumi-data/bangumi-data): English titles for the series
+# Bangumi has none for. data.json is downloaded again when the repo's latest commit changes.
+BANGUMI_DATA_COMMITS_URL = "https://api.github.com/repos/bangumi-data/bangumi-data/commits?sha=master&per_page=1"
+BANGUMI_DATA_URL = "https://raw.githubusercontent.com/bangumi-data/bangumi-data/refs/heads/master/dist/data.json"
+BANGUMI_DATA_NAME = "data.json"              # in DATA_DIR
+# The Kaggle MyAnimeList characters dataset (https://www.kaggle.com/datasets/syahrulapriansyah2/anime-characters):
+# English names for the characters Bangumi has none for. `alternate_name` is the Japanese
+# name, `name` the English one ("Last, First"). Downloaded once; kept in DATA_DIR.
+MAL_URL = "https://www.kaggle.com/api/v1/datasets/download/syahrulapriansyah2/anime-characters"
+MAL_ARCHIVE = "anime-characters.zip"
+MAL_CSV = "mal_characters_detailed.csv"
 
 # The only files of the archive that are needed (the rest is skipped).
 SUBJECTS = "subject.jsonlines"
@@ -130,17 +154,74 @@ def download(url: str, dest: Path, digest: str = "") -> None:
         raise ValueError(f"sha256 mismatch for {dest.name}: expected {expected}, got {sha.hexdigest()}")
 
 
-def extract_needed(archive: Path, data_dir: Path) -> None:
-    """Extract only NEEDED from the zip (by file name, wherever it sits in the archive)."""
+def extract_needed(archive: Path, data_dir: Path, names: tuple[str, ...] = NEEDED) -> None:
+    """Extract only `names` from the zip (by file name, wherever it sits in the archive)."""
     with zipfile.ZipFile(archive) as z:
         members = {Path(n).name: n for n in z.namelist() if not n.endswith("/")}
-        missing = [n for n in NEEDED if n not in members]
+        missing = [n for n in names if n not in members]
         if missing:
             raise ValueError(f"{archive.name} does not contain {', '.join(missing)}")
-        for name in NEEDED:
-            with z.open(members[name]) as src, (data_dir / name).open("wb") as dst:
-                while chunk := src.read(1 << 20):
-                    dst.write(chunk)
+        for name in names:
+            part = data_dir / (name + ".part")        # never leave a truncated file under its real name
+            try:
+                with z.open(members[name]) as src, part.open("wb") as dst:
+                    while chunk := src.read(1 << 20):
+                        dst.write(chunk)
+                os.replace(part, data_dir / name)
+            finally:
+                part.unlink(missing_ok=True)
+
+
+def update_mal_dataset() -> Path:
+    """Make data/mal_characters_detailed.csv exist: download the Kaggle archive, extract only
+    the csv, delete the archive. Nothing is downloaded if the csv is already there."""
+    path = DATA_DIR / MAL_CSV
+    if path.exists():
+        print(f"{MAL_CSV} already exists — skipping the download.")
+        return path
+    archive = DATA_DIR / MAL_ARCHIVE
+    print(f"Downloading the MyAnimeList characters dataset ({MAL_URL})...")
+    try:
+        download(MAL_URL, archive)
+        extract_needed(archive, DATA_DIR, (MAL_CSV,))
+    except Exception as e:
+        sys.exit(f"Could not get {MAL_CSV} from {MAL_URL}: {e}")
+    finally:
+        archive.unlink(missing_ok=True)
+    return path
+
+
+def update_bangumi_data() -> Path:
+    """Make data/data.json the one of bangumi-data's latest commit and return its path.
+
+    The commit the file was downloaded at is kept in BANGUMI_COMMIT_FILE; the file is
+    downloaded again when the latest commit differs or the file is missing. If the commit
+    can't be checked or the download fails, an existing file is used."""
+    path = DATA_DIR / BANGUMI_DATA_NAME
+    try:
+        latest = fetch_json(BANGUMI_DATA_COMMITS_URL)[0]["sha"].strip()
+        try:
+            saved = BANGUMI_COMMIT_FILE.read_text(encoding="utf-8").strip()
+        except OSError:
+            saved = ""
+        if saved == latest and path.exists():
+            print(f"bangumi-data is up to date ({latest[:7]}) — skipping the download.")
+            return path
+        print(f"Downloading bangumi-data data.json ({latest[:7]})...")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        try:
+            download(BANGUMI_DATA_URL, part)
+            json.loads(part.read_text(encoding="utf-8"))          # reject a truncated / non-JSON file
+            os.replace(part, path)
+        finally:
+            part.unlink(missing_ok=True)
+        BANGUMI_COMMIT_FILE.write_text(latest, encoding="utf-8")
+    except Exception as e:
+        if not path.exists():
+            sys.exit(f"Could not get bangumi-data ({BANGUMI_DATA_COMMITS_URL}): {e}")
+        print(f"Could not update bangumi-data ({e}) — using the data.json already in {DATA_DIR}.")
+    return path
 
 
 def data_complete() -> bool:
@@ -295,6 +376,52 @@ def name_forms(raw: str) -> set[str]:
     return forms
 
 
+def english_titles(items: list[dict]) -> tuple[dict[int, str], dict[str, str]]:
+    """English titles from bangumi-data's `items` ({"title": original title,
+    "titleTranslate": {"en": [...]}, "sites": [{"site": "bangumi", "id": "123"}, ...]}):
+    -> (Bangumi subject id -> title, norm(original title) -> title). The first English
+    title of an entry and the first entry for an id / title win."""
+    by_id: dict[int, str] = {}
+    by_title: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        en = next((t.strip() for t in (item.get("titleTranslate") or {}).get("en") or ()
+                   if isinstance(t, str) and t.strip()), "")
+        if not en:
+            continue
+        for site in item.get("sites") or ():
+            if isinstance(site, dict) and site.get("site") == "bangumi" and (sid := _int(site.get("id"))):
+                by_id.setdefault(sid, en)
+        if isinstance(item.get("title"), str) and (key := norm(item["title"])):
+            by_title.setdefault(key, en)
+    return by_id, by_title
+
+
+def read_english_names(path: Path) -> dict[str, str]:
+    """norm(Japanese name) -> English name, from the Kaggle csv (`alternate_name`, `name`).
+    A Japanese name shared by characters with different English names is left out: without
+    more than the name there is no telling which one is meant."""
+    seen: dict[str, set[str]] = {}
+    csv.field_size_limit(2**31 - 1)
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            en = (row.get("name") or "").strip()
+            if en and (key := norm(row.get("alternate_name") or "")):
+                seen.setdefault(key, set()).add(en)
+    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+
+def english_name(raw: str, table: dict[str, str]) -> str:
+    """English name for the Japanese `raw` ("" if none): its own spelling first, then the
+    other ways it is looked up (both orders of a two-part name)."""
+    first = norm(raw)
+    for key in [first, *sorted(name_forms(raw) - {first})]:
+        if key in table:
+            return table[key]
+    return ""
+
+
 def opencc_s2t() -> Callable[[str], str] | None:
     """Simplified -> Traditional through OpenCC, or None when it is not installed."""
     try:
@@ -367,7 +494,9 @@ def vtuber_names(rec: dict, s2t: Callable[[str], str] | None) -> tuple[list[str]
 # ---------------------------------------------------------------------------
 
 def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
-                exclude: frozenset[str] = frozenset(), vtubers: list[dict] = ()) -> dict:
+                exclude: frozenset[str] = frozenset(), vtubers: list[dict] = (),
+                english: tuple[dict[int, str], dict[str, str]] | None = None,
+                english_names: dict[str, str] | None = None) -> dict:
     subjects = select_subjects(data_dir / SUBJECTS, exclude)
     print(f"subjects (anime / games with a matching tag): {len(subjects)}")
     char_subject = first_subject_per_character(data_dir / LINKS, subjects)
@@ -382,8 +511,21 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
     series_idx = {sid: i for i, sid in enumerate(sorted(set(char_subject.values())))}
     series: list[list[str]] = [[]] * len(series_idx)
     aliases: dict[str, int] = {}
+    english_by = [0, 0]                              # English titles found by id / by title
     for sid, i in series_idx.items():                # ascending id: the oldest work keeps a clash
         titles, every = subject_titles(subjects[sid], s2t)
+        if english and not titles[0]:                # Bangumi has no English title: ask bangumi-data
+            by_id, by_title = english
+            en = by_id.get(sid, "")
+            if en:
+                english_by[0] += 1
+            else:                                    # no entry with this subject id: Japanese title
+                en = next((by_title[k] for t in (titles[1], subjects[sid].get("name") or "")
+                           if (k := norm(t)) in by_title), "")
+                english_by[1] += bool(en)
+            if en:
+                titles[0] = en
+                every.append(en)
         series[i] = per_lang(titles)
         for t in every:
             if key := norm(t):
@@ -391,10 +533,15 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
 
     chars: list[list] = []
     names: dict[str, list[int]] = {}
+    english_chars = 0
     wanted = set(char_subject)
     for rec in sorted((r for r in read_jsonl(data_dir / CHARACTERS) if _int(r.get("id")) in wanted),
                       key=lambda r: _int(r.get("id"))):
         per, every = character_names(rec, s2t)
+        if english_names and not per[0] and (en := english_name(rec.get("name") or "", english_names)):
+            per[0] = en                              # Bangumi has no English name: ask the MAL dataset
+            every.append(en)
+            english_chars += 1
         if not any(per):
             continue
         ci = len(chars)
@@ -404,6 +551,12 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
                 if not names.get(f) or names[f][-1] != ci:
                     names.setdefault(f, []).append(ci)
 
+    if english is not None:
+        print(f"English series titles from bangumi-data: {english_by[0]} by subject id, "
+              f"{english_by[1]} by Japanese title, {sum(1 for t in series if not t[0])} series still without one")
+    if english_names is not None:
+        print(f"English character names from the MAL dataset: {english_chars} added, "
+              f"{sum(1 for c in chars if not c[0][0])} characters still without one")
     if vtubers:                                      # last: after every anime / game character
         vi = len(series)
         series.append([VTUBER_SERIES] * n)
@@ -443,7 +596,9 @@ def main() -> None:
     s2t = opencc_s2t()
     if s2t is None:
         print("OpenCC is not installed: the index will have no Traditional Chinese (pip install OpenCC).")
-    index = build_index(DATA_DIR, s2t, exclude, vtubers)
+    english = english_titles(json.loads(update_bangumi_data().read_text(encoding="utf-8")).get("items", []))
+    english_names = read_english_names(update_mal_dataset())
+    index = build_index(DATA_DIR, s2t, exclude, vtubers, english, english_names)
     OUTPUT.write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"wrote {OUTPUT} ({OUTPUT.stat().st_size / 1e6:.2f} MB)")
 
