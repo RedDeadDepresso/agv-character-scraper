@@ -16,7 +16,8 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
 3. Characters (subject-characters.jsonlines): keep the links to those subjects. A character
    linked to several of them keeps only the earliest released one (the subject's `date`; the
    lowest subject id on a tie or without a date): the original work, not a sequel or an
-   adaptation. The kept subjects are the series of the index.
+   adaptation. Links of `type` 3 (客串, a guest / collab appearance) do not count while the
+   character has another link (all of them are used if every link is a guest one). The kept subjects are the series of the index.
 4. Series titles and characters' names are read from the dump fields and the wiki infobox
    (parsed with the bgm-tv-wiki package, see common/wiki_template.yml for the keys) in English, Japanese,
    Simplified and Traditional Chinese, together with every alias.
@@ -331,22 +332,29 @@ def release_key(rec: dict, sid: int) -> tuple[str, int]:
     return (date if re.match(r"\d{4}", date) else "9999", sid)
 
 
+GUEST_TYPE = 3   # `type` of a subject-characters link: 1 main, 2 supporting, 3 guest (collab)
+
+
 def first_subject_per_character(path: Path, subjects: dict[int, dict]) -> dict[int, int]:
     """character id -> the earliest released of the kept subjects it appears in (lowest id
-    on a tie), i.e. the game rather than its anime adaptation."""
+    on a tie), i.e. the game rather than its anime adaptation. Subjects where the character
+    is only a guest (`type` 3, a collab character) are passed over, unless every kept
+    subject it appears in is such a one."""
     keys = {sid: release_key(rec, sid) for sid, rec in subjects.items()}
-    best: dict[int, int] = {}
+    best: dict[int, tuple[bool, tuple[str, int], int]] = {}   # cid -> (guest, release key, sid)
     lowest: dict[int, int] = {}
     for rec in read_jsonl(path):
         sid, cid = _int(rec.get("subject_id")), _int(rec.get("character_id"))
         if sid in subjects and cid:
-            if cid not in best or keys[sid] < keys[best[cid]]:
-                best[cid] = sid
+            cand = (_int(rec.get("type")) == GUEST_TYPE, keys[sid], sid)
+            if cid not in best or cand < best[cid]:
+                best[cid] = cand
             if cid not in lowest or sid < lowest[cid]:
                 lowest[cid] = sid
-    moved = sum(1 for cid, sid in best.items() if sid != lowest[cid])
-    print(f"characters whose subject is not the lowest id but the earliest release: {moved}")
-    return best
+    out = {cid: c[2] for cid, c in best.items()}
+    moved = sum(1 for cid, sid in out.items() if sid != lowest[cid])
+    print(f"characters whose subject is not the lowest id but the earliest release / a non-guest one: {moved}")
+    return out
 
 
 # ---------------------------------------------------------------------------

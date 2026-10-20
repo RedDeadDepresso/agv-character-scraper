@@ -623,3 +623,20 @@ def test_download_checks_sha256(tmp_path):
     assert (tmp_path / "ok.bin").read_bytes() == b"hello"
     with pytest.raises(ValueError):
         main.download(src.as_uri(), tmp_path / "bad.bin", "sha256:" + "0" * 64)
+
+
+def test_guest_links_do_not_choose_the_series(tmp_path):
+    tag = [{"name": "JRPG", "count": 1}]
+    (tmp_path / "subject.jsonlines").write_text(jl(
+        {"id": 1, "type": 4, "name": "Old game", "date": "2010-01-01", "tags": tag},
+        {"id": 2, "type": 4, "name": "New game", "date": "2020-01-01", "tags": tag},
+        {"id": 3, "type": 4, "name": "Newer game", "date": "2022-01-01", "tags": tag},
+    ), encoding="utf-8")
+    (tmp_path / "links.jsonlines").write_text(jl(
+        {"character_id": 1, "subject_id": 1, "type": 3}, {"character_id": 1, "subject_id": 2, "type": 1},   # guest in the older game
+        {"character_id": 2, "subject_id": 2, "type": 2}, {"character_id": 2, "subject_id": 3, "type": 1},   # both real: the earlier
+        {"character_id": 3, "subject_id": 2, "type": 3}, {"character_id": 3, "subject_id": 3, "type": 3},   # guest everywhere: earliest
+        {"character_id": 4, "subject_id": 1, "type": 3}, {"character_id": 4, "subject_id": 3},              # no type: not a guest
+    ), encoding="utf-8")
+    subjects = main.select_subjects(tmp_path / "subject.jsonlines")
+    assert main.first_subject_per_character(tmp_path / "links.jsonlines", subjects) == {1: 2, 2: 2, 3: 2, 4: 3}
