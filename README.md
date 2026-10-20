@@ -42,7 +42,8 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
    [VTuber database](https://vdb.vtbs.moe/json/list.json) (fetched every run, not saved; `group`,
    `fan` and `misc` entries are skipped) come after all the other characters, all in one series,
    `VTubers`, with score 0 because the database has no popularity;
-7. writes `agv_character_index.json`.
+7. writes `agv_character_index.json`; a character whose Bangumi infobox has a readable birthday (`生日`,
+   e.g. `9月28日`, `9/28` or `2000-09-28`; the year is ignored) gets its month and day appended to its entry.
 
 The format is described at the top of `main.py`.
 

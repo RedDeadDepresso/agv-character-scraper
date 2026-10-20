@@ -44,9 +44,13 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
     "langs":   ["en_us", "ja_jp", "zh_cn", "zh_tw"],     # language of each position below
     "series":  [["Fate/stay night", "Fate/stay night", "命运/停留之夜", "命運/停留之夜"], ...],
     "aliases": {"<norm title>": <series idx>, ...},      # every title and alias -> series
-    "chars":   [[["Tohsaka, Rin", "遠坂, 凛", "远坂, 凛", "遠坂, 凛"], [series idx], collects], ...],
+    "chars":   [[["Tohsaka, Rin", "遠坂, 凛", "远坂, 凛", "遠坂, 凛"], [series idx], collects, 2, 3], ...],
     "names":   {"<norm name form>": [<chars idx>, ...]}  # every name and alias, both orders
   }
+
+A character's birthday (the infobox `生日`, see parse_birthday) is the month and day appended to
+its entry, as in the example ("遠坂, 凛" was born on 3 February); characters without one (or
+with one that cannot be read) have just the three first items.
 
 Names are "Last, First" where the order is known. Text missing in a language is "" and
 KKAFIO falls back to another language. "zh_tw" comes from the Simplified text through OpenCC
@@ -62,6 +66,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.request
 import zipfile
 from collections.abc import Callable, Iterator
@@ -366,6 +371,55 @@ def _scalar(wiki, key: str) -> str:
     return v.strip() if isinstance(v, str) else ""
 
 
+_MONTHS = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3, "april": 4, "apr": 4,
+    "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7, "august": 8, "aug": 8,
+    "september": 9, "sept": 9, "sep": 9, "october": 10, "oct": 10, "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}
+_DAYS_IN = [0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]      # February: leap day allowed
+_BIRTH_CJK = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})")                           # 9月28日, 2000年9月28日
+_BIRTH_YMD = re.compile(r"\d{4}\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})")      # 2000-09-28
+_BIRTH_MD = re.compile(r"(?:^|\D)(\d{1,2})\s*[-/.]\s*(\d{1,2})(?:\D|$)")        # 9/28, 28/9
+_BIRTH_MONTH_DAY = re.compile(r"\b([a-z]+)\.?\s*(\d{1,2})(?:st|nd|rd|th)?\b")     # September 28
+_BIRTH_DAY_MONTH = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:of\s+)?([a-z]+)\b\.?")   # 28 September
+
+
+def parse_birthday(text: str) -> tuple[int, int]:
+    """(month, day) out of the free text of a Bangumi `生日` field: "9月28日",
+    "2000年9月28日（天秤座）", "9/28", "28/9" (a first number above 12 is the day), "2000-09-28",
+    "September 28" or "28th of September". A year is ignored. (0, 0) when there is no valid
+    month and day (a month alone, "不明", an impossible date such as 2月30日)."""
+    t = unicodedata.normalize("NFKC", text or "").lower()
+
+    def ok(m: int, d: int) -> bool:
+        return 1 <= m <= 12 and 1 <= d <= _DAYS_IN[m]
+
+    for pattern in (_BIRTH_CJK, _BIRTH_YMD):
+        if m := pattern.search(t):
+            if ok(int(m[1]), int(m[2])):
+                return int(m[1]), int(m[2])
+    if m := _BIRTH_MD.search(t):
+        a, b = int(m[1]), int(m[2])
+        if a > 12 >= b:
+            a, b = b, a
+        if ok(a, b):
+            return a, b
+    for m in _BIRTH_MONTH_DAY.finditer(t):
+        if m[1] in _MONTHS and ok(_MONTHS[m[1]], int(m[2])):
+            return _MONTHS[m[1]], int(m[2])
+    for m in _BIRTH_DAY_MONTH.finditer(t):
+        if m[2] in _MONTHS and ok(_MONTHS[m[2]], int(m[1])):
+            return _MONTHS[m[2]], int(m[1])
+    return 0, 0
+
+
+def character_birthday(rec: dict) -> tuple[int, int]:
+    """(month, day) of a character's infobox `生日`, (0, 0) when it has none."""
+    wiki = try_parse(rec.get("infobox") or "")
+    return parse_birthday(" ".join(i.value for i in wiki.get_as_items("生日") if i.value))
+
+
 def _aliases(wiki) -> list[tuple[str, str]]:
     """The 别名 array as (key, value) pairs; scalar / empty values are handled."""
     return [(i.key, i.value.strip()) for i in wiki.get_as_items("别名") if i.value and i.value.strip()]
@@ -446,16 +500,19 @@ def english_name(raw: str, table: dict[str, str]) -> str:
     return ""
 
 
+OPENCC_CONFIG = "s2tw"   # Simplified -> Traditional with the Taiwan standard glyphs, no phrase changes
+
+
 def opencc_s2t() -> Callable[[str], str] | None:
-    """Simplified -> Traditional through OpenCC, or None when it is not installed."""
+    """Simplified -> Traditional (Taiwan standard) through OpenCC, or None when it is not installed."""
     try:
         from opencc import OpenCC
     except ImportError:
         return None
     try:
-        return OpenCC("s2t").convert
+        return OpenCC(OPENCC_CONFIG).convert
     except Exception:
-        return OpenCC("s2t.json").convert
+        return OpenCC(OPENCC_CONFIG + ".json").convert
 
 
 def _latin_title(text: str) -> bool:
@@ -579,7 +636,10 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
         if not any(per):
             continue
         ci = len(chars)
-        chars.append([per_lang(per), [series_idx[char_subject[_int(rec["id"])]]], _int(rec.get("collects"))])
+        entry = [per_lang(per), [series_idx[char_subject[_int(rec["id"])]]], _int(rec.get("collects"))]
+        if (birthday := character_birthday(rec)) != (0, 0):
+            entry += birthday                        # month, day: only when known
+        chars.append(entry)
         for text in every:
             for f in name_forms(text):
                 if not names.get(f) or names[f][-1] != ci:

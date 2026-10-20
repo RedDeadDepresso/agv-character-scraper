@@ -43,7 +43,7 @@ LINKS = jl(
 
 CHARACTERS = jl(
     {"id": 100, "role": 1, "name": "遠坂 凛", "collects": 5000, "comments": 1,
-     "infobox": "{{Infobox Crt\n|简体中文名= 远坂凛\n|别名={\n[第二中文名|远坂 凛]\n[英文名|Rin Tohsaka]\n"
+     "infobox": "{{Infobox Crt\n|简体中文名= 远坂凛\n|生日= 2月3日（水瓶座）\n|别名={\n[第二中文名|远坂 凛]\n[英文名|Rin Tohsaka]\n"
                 "[日文名|遠坂 凛]\n[纯假名|とおさか りん]\n[罗马字|Tousaka Rin]\n[昵称|赤い悪魔]\n}\n}}"},
     {"id": 101, "role": 1, "name": "Manga Person", "collects": 1, "infobox": ""},
     {"id": 102, "role": 1, "name": "Untagged Person", "collects": 1, "infobox": ""},
@@ -640,3 +640,25 @@ def test_guest_links_do_not_choose_the_series(tmp_path):
     ), encoding="utf-8")
     subjects = main.select_subjects(tmp_path / "subject.jsonlines")
     assert main.first_subject_per_character(tmp_path / "links.jsonlines", subjects) == {1: 2, 2: 2, 3: 2, 4: 3}
+
+
+@pytest.mark.parametrize("text, want", [
+    ("9月28日", (9, 28)), ("２月２９日", (2, 29)), ("2000年9月28日（天秤座）", (9, 28)), ("12月5日", (12, 5)),
+    ("9/28", (9, 28)), ("28/9", (9, 28)), ("4/1", (4, 1)), ("2000-09-28", (9, 28)), ("2000/9/28", (9, 28)),
+    ("September 28", (9, 28)), ("Sept. 28th", (9, 28)), ("28th of September", (9, 28)), ("1 Jan", (1, 1)),
+    ("3月3日（ひな祭り）", (3, 3)),
+    ("", (0, 0)), ("不明", (0, 0)), ("6月", (0, 0)), ("1994年", (0, 0)), ("2月30日", (0, 0)),
+    ("13月1日", (0, 0)), ("may", (0, 0)), ("身高 170", (0, 0)), ("100/200", (0, 0)),
+])
+def test_parse_birthday(text, want):
+    assert main.parse_birthday(text) == want
+
+
+def test_birthday_is_appended_to_the_character_when_known(data):
+    idx = main.build_index(data, t2s_like)
+    rin = next(c for c in idx["chars"] if c[2] == 5000)
+    assert rin[3:] == [2, 3]
+    others = [c for c in idx["chars"] if c[2] != 5000]
+    assert others and all(len(c) == 3 for c in others)     # no birthday: nothing appended
+    assert main.character_birthday({"infobox": "{{Infobox Crt\n|生日= 不明\n}}"}) == (0, 0)
+    assert main.character_birthday({"infobox": "not a wiki"}) == (0, 0)
