@@ -41,7 +41,11 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
 6. appends the VTubers: the `vtuber` entries of the
    [VTuber database](https://vdb.vtbs.moe/json/list.json) (fetched every run, not saved; `group`,
    `fan` and `misc` entries are skipped) come after all the other characters, all in one series,
-   `VTubers`, with score 0 because the database has no popularity;
+   `VTubers`, with score 0 because the database has no popularity. The database has no birthdays
+   either: they come from [Amatsukaze](https://amatsukaze.rl404.com) (`data/amatsukaze_vtubers.json`,
+   `id`, `name` and `birthday` of every VTuber, newest debut first). The first run fetches the whole
+   list, later runs only the pages up to the first VTuber already saved. A VTuber with an English
+   name gets the birthday of the Amatsukaze VTuber with the same `name` (compared with `norm()`);
 7. writes `agv_character_index.json`; a character whose Bangumi infobox has a readable birthday (`生日`,
    e.g. `9月28日`, `9/28` or `2000-09-28`; the year is ignored) gets its month and day appended to its entry.
 

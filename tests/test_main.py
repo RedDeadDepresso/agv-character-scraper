@@ -662,3 +662,86 @@ def test_birthday_is_appended_to_the_character_when_known(data):
     assert others and all(len(c) == 3 for c in others)     # no birthday: nothing appended
     assert main.character_birthday({"infobox": "{{Infobox Crt\n|生日= 不明\n}}"}) == (0, 0)
     assert main.character_birthday({"infobox": "not a wiki"}) == (0, 0)
+
+
+# --- VTuber birthdays from Amatsukaze ---------------------------------------
+
+def _vt(i, name, birthday="2004-12-17T00:00:00Z"):
+    return {"id": i, "name": name, "birthday": birthday, "image": "x", "debut_date": "2026-01-01T00:00:00Z"}
+
+
+def _fake_api(monkeypatch, vtubers, limit=2):
+    """Serve `vtubers` (newest first) in pages of `limit`; returns the list of requested pages."""
+    monkeypatch.setattr(main, "AMATSUKAZE_LIMIT", limit)
+    monkeypatch.setattr(main, "AMATSUKAZE_DELAY", 0)
+    pages = []
+
+    def fetch(url):
+        q = dict(p.split("=") for p in url.split("?")[1].split("&"))
+        pages.append(int(q["page"]))
+        n = int(q["page"])
+        return {"status": 200, "message": "ok", "data": vtubers[(n - 1) * limit:n * limit]}
+    monkeypatch.setattr(main, "fetch_json", fetch)
+    return pages
+
+
+def test_amatsukaze_url_has_only_the_wanted_parameters():
+    url = main.amatsukaze_page_url(3)
+    assert url == ("https://amatsukaze.rl404.com/api/vtubers?name=&birthday_day=&start_birthday_month="
+                   "&end_birthday_month=&page=3&limit=50&sort=-debut_date")
+
+
+def test_amatsukaze_first_run_fetches_everything_and_later_runs_stop_at_the_first_saved(tmp_path, monkeypatch):
+    path = tmp_path / "data" / "amatsukaze_vtubers.json"
+    api = [_vt(5, "E"), _vt(4, "D", None), _vt(3, "C"), _vt(2, "B"), _vt(1, "A")]
+    pages = _fake_api(monkeypatch, api)
+    got = main.update_vtuber_birthdays(path)
+    assert [v["id"] for v in got] == [5, 4, 3, 2, 1] and pages == [1, 2, 3]
+    assert json.loads(path.read_text(encoding="utf-8")) == got
+    assert set(got[0]) == {"id", "name", "birthday"}                  # only what is needed is saved
+
+    api[:0] = [_vt(7, "G"), _vt(6, "F")]                              # two new VTubers
+    pages = _fake_api(monkeypatch, api)
+    got = main.update_vtuber_birthdays(path)
+    assert [v["id"] for v in got] == [7, 6, 5, 4, 3, 2, 1]
+    assert pages == [1, 2]                                            # 5 is on page 2: nothing older is fetched
+
+    pages = _fake_api(monkeypatch, api)
+    main.update_vtuber_birthdays(path)
+    assert pages == [1]                                               # nothing new
+
+
+def test_amatsukaze_failure_saves_nothing_and_keeps_the_saved_list(tmp_path, monkeypatch):
+    path = tmp_path / "v.json"
+    path.write_text(json.dumps([{"id": 1, "name": "A", "birthday": None}]), encoding="utf-8")
+
+    def broken(url):
+        if "page=2" in url:
+            raise OSError("down")
+        return {"data": [_vt(9, "I"), _vt(8, "H")]}
+    monkeypatch.setattr(main, "fetch_json", broken)
+    monkeypatch.setattr(main, "AMATSUKAZE_LIMIT", 2)
+    monkeypatch.setattr(main, "AMATSUKAZE_DELAY", 0)
+    assert main.update_vtuber_birthdays(path) == [{"id": 1, "name": "A", "birthday": None}]
+    assert json.loads(path.read_text(encoding="utf-8")) == [{"id": 1, "name": "A", "birthday": None}]
+    assert main.update_vtuber_birthdays(tmp_path / "none.json") == []      # no saved list: nothing, no crash
+
+
+def test_vtuber_birthdays_by_name():
+    b = main.vtuber_birthdays([
+        _vt(1, "Ninomae Ina'nis", "1998-02-20T00:00:00Z"), _vt(2, "No Birthday", None),
+        _vt(3, "Zero Time", "0001-01-01T00:00:00Z"), _vt(4, "Same Name", "2000-01-02T00:00:00Z"),
+        _vt(5, "same name", "2000-03-04T00:00:00Z"), _vt(6, "Twin", "2000-05-06T00:00:00Z"),
+        _vt(7, "Twin", "2001-05-06T00:00:00Z"), {"junk": 1}, "junk"])
+    assert b == {norm("Ninomae Inanis"): (2, 20), norm("Twin"): (5, 6)}   # clashing names are left out
+
+
+def test_vtuber_birthday_is_appended_when_the_english_name_matches(data):
+    births = main.vtuber_birthdays([_vt(1, "Ninomae Inanis", "1998-02-20T00:00:00Z"), _vt(2, "晴朗蓝", "2000-01-01T00:00:00Z")])
+    idx = main.build_index(data, t2s_like, vtubers=VTUBERS, birthdays=births)
+    added = {(c[0][0] or c[0][2]): c for c in idx["chars"][-4:]}
+    assert added["Ninomae Ina'nis"][2:] == [0, 2, 20]                  # punctuation does not matter
+    assert added["晴朗蓝"][2:] == [0]                                  # no English name: no lookup
+    assert all(len(c) == 3 for k, c in added.items() if k != "Ninomae Ina'nis")
+    no_births = main.build_index(data, t2s_like, vtubers=VTUBERS)
+    assert all(len(c) == 3 for c in no_births["chars"][-4:])

@@ -36,7 +36,9 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
 7. VTubers: the `vtuber` entries of the VTuber database (VTUBERS_URL, fetched, not saved) are
    appended after all the other characters, all in one series, "VTubers", with score 0 (the
    database has no popularity). Their names come from `name` (cn / jp / en and the rest,
-   `extra` included).
+   `extra` included). The birthday of a VTuber with an English name is found on Amatsukaze by
+   that name (norm(); the list is AMATSUKAZE_URL, saved in data/amatsukaze_vtubers.json and
+   extended on the next run until the first saved VTuber).
 8. Write agv_character_index.json (version 1):
 
   {
@@ -66,7 +68,9 @@ import json
 import os
 import re
 import sys
+import time
 import unicodedata
+import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Callable, Iterator
@@ -88,6 +92,12 @@ SERIES_URL = "https://raw.githubusercontent.com/RedDeadDepresso/gacha-character-
 VTUBERS_URL = "https://vdb.vtbs.moe/json/list.json"
 VTUBER_SERIES = "VTubers"
 VTUBER_TYPES = frozenset({"vtuber"})         # not "group" (agencies), "fan" or "misc"
+# Amatsukaze (https://amatsukaze.rl404.com) has the VTubers' birthdays; the VTuber database has none.
+# Its list is saved in data/ and only the VTubers newer than the first saved one are fetched.
+AMATSUKAZE_URL = "https://amatsukaze.rl404.com/api/vtubers"
+AMATSUKAZE_FILE = "amatsukaze_vtubers.json"
+AMATSUKAZE_LIMIT = 50                         # VTubers per page
+AMATSUKAZE_DELAY = 0.3                        # seconds between two pages
 # bangumi-data (https://github.com/bangumi-data/bangumi-data): English titles for the series
 # Bangumi has none for. data.json is downloaded again when the repo's latest commit changes.
 BANGUMI_DATA_COMMITS_URL = "https://api.github.com/repos/bangumi-data/bangumi-data/commits?sha=master&per_page=1"
@@ -143,6 +153,73 @@ def fetch_vtubers() -> list[dict]:
     """The `vtbs` array of the VTuber database's list.json (not saved)."""
     data = fetch_json(VTUBERS_URL)
     return data["vtbs"] if isinstance(data, dict) else data
+
+
+def amatsukaze_page_url(page: int) -> str:
+    """One page of the list, newest debut first. Only the name, birthday, page, limit and sort
+    parameters are sent (the filters are empty: every VTuber is listed)."""
+    return AMATSUKAZE_URL + "?" + urllib.parse.urlencode([
+        ("name", ""), ("birthday_day", ""), ("start_birthday_month", ""), ("end_birthday_month", ""),
+        ("page", page), ("limit", AMATSUKAZE_LIMIT), ("sort", "-debut_date")])
+
+
+def update_vtuber_birthdays(path: Path) -> list[dict]:
+    """The Amatsukaze VTubers (newest debut first) as [{"id", "name", "birthday"}], saved in `path`.
+    A saved list is only extended: pages are fetched until the first VTuber that is already saved.
+    Nothing is saved unless that point was reached, so the file never has a gap; when the fetch
+    fails the saved list (or none) is returned, the birthdays are optional."""
+    known: list[dict] = []
+    if path.exists():
+        try:
+            known = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            print(f"{path.name} is not valid JSON, fetching everything again")
+    first = known[0].get("id") if known else None
+    fresh: list[dict] = []
+    try:
+        page, reached = 1, False
+        while not reached:
+            data = fetch_json(amatsukaze_page_url(page))
+            items = [v for v in (data.get("data") if isinstance(data, dict) else None) or [] if isinstance(v, dict)]
+            for v in items:
+                if first is not None and v.get("id") == first:
+                    reached = True
+                    break
+                fresh.append({"id": v.get("id"), "name": v.get("name"), "birthday": v.get("birthday")})
+            if len(items) < AMATSUKAZE_LIMIT:                       # the last page
+                reached = True
+            page += 1
+            if not reached:
+                time.sleep(AMATSUKAZE_DELAY)
+    except Exception as e:
+        print(f"Could not fetch the VTuber birthdays ({e}): using the {len(known)} saved VTubers")
+        return known
+    if fresh or not path.exists():
+        known = fresh + known
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(known, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"Amatsukaze VTubers: {len(fresh)} new, {len(known)} saved")
+    return known
+
+
+def vtuber_birthdays(records: list[dict]) -> dict[str, tuple[int, int]]:
+    """norm(name) -> (month, day) of the Amatsukaze VTubers that have a birthday. A name that
+    several VTubers share with different birthdays is left out (it cannot be told apart)."""
+    out: dict[str, tuple[int, int]] = {}
+    clash: set[str] = set()
+    for rec in records:
+        if not isinstance(rec, dict) or not isinstance(rec.get("name"), str):
+            continue
+        day = str(rec.get("birthday") or "")[:10]
+        if not day[:4].isdigit() or int(day[:4]) < 1000:            # null or the zero time 0001-01-01
+            continue
+        birthday = parse_birthday(day)
+        key = norm(rec["name"])
+        if birthday == (0, 0) or not key:
+            continue
+        if out.setdefault(key, birthday) != birthday:
+            clash.add(key)
+    return {k: v for k, v in out.items() if k not in clash}
 
 
 def download(url: str, dest: Path, digest: str = "") -> None:
@@ -582,7 +659,8 @@ def vtuber_names(rec: dict, s2t: Callable[[str], str] | None) -> tuple[list[str]
 def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
                 exclude: frozenset[int] = frozenset(), vtubers: list[dict] = (),
                 english: tuple[dict[int, str], dict[str, str]] | None = None,
-                english_names: dict[str, str] | None = None) -> dict:
+                english_names: dict[str, str] | None = None,
+                birthdays: dict[str, tuple[int, int]] | None = None) -> dict:
     subjects = select_subjects(data_dir / SUBJECTS, exclude)
     print(f"subjects (anime / games with a matching tag): {len(subjects)}")
     char_subject = first_subject_per_character(data_dir / LINKS, subjects)
@@ -665,7 +743,10 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
             if not any(per):
                 continue
             ci = len(chars)
-            chars.append([per_lang(per), [vi], 0])   # the database has no popularity: score 0
+            entry = [per_lang(per), [vi], 0]         # the database has no popularity: score 0
+            if birthdays and per[0] and (birthday := birthdays.get(norm(per[0]))):
+                entry += birthday                    # the English name found on Amatsukaze
+            chars.append(entry)
             count += 1
             for text in every:
                 for f in name_forms(text):
@@ -687,13 +768,14 @@ def main() -> None:
         vtubers = fetch_vtubers()
     except Exception as e:
         sys.exit(f"Could not fetch {VTUBERS_URL}: {e}")
+    birthdays = vtuber_birthdays(update_vtuber_birthdays(DATA_DIR / AMATSUKAZE_FILE))
     update_data()
     s2t = opencc_s2t()
     if s2t is None:
         print("OpenCC is not installed: the index will have no Traditional Chinese (pip install OpenCC).")
     english = english_titles(json.loads(update_bangumi_data().read_text(encoding="utf-8")).get("items", []))
     english_names = read_english_names(update_mal_dataset())
-    index = build_index(DATA_DIR, s2t, exclude, vtubers, english, english_names)
+    index = build_index(DATA_DIR, s2t, exclude, vtubers, english, english_names, birthdays)
     OUTPUT.write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"wrote {OUTPUT} ({OUTPUT.stat().st_size / 1e6:.2f} MB)")
 
