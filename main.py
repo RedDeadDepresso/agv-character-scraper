@@ -12,7 +12,7 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
 2. Subjects (subject.jsonlines): keep animation (type 2) and games (type 4) that carry one
    of TAGS ("visual novel", "japan", "jrpg"; Chinese spellings too), in `tags` or `meta_tags`.
    Subjects that appear in series.json (SERIES_URL, fetched, not saved) are left out: those
-   with a name, title or alias equal to a game / title / alias there (compared with norm()).
+   whose id is the `bangumi_id` of a game there.
 3. Characters (subject-characters.jsonlines): keep the links to those subjects. A character
    linked to several of them keeps only the earliest released one (the subject's `date`; the
    lowest subject id on a tie or without a date): the original work, not a sequel or an
@@ -76,7 +76,7 @@ BANGUMI_COMMIT_FILE = ROOT / "bangumi_data_last_commit.txt"   # commit data/data
 OUTPUT = ROOT / "agv_character_index.json"
 
 LATEST_URL = "https://raw.githubusercontent.com/bangumi/Archive/refs/heads/master/aux/latest.json"
-# The gacha games the other scraper covers; subjects with one of these titles are left out.
+# The gacha games the other scraper covers; the subjects with their `bangumi_id` are left out.
 SERIES_URL = "https://raw.githubusercontent.com/RedDeadDepresso/gacha-character-scraper/refs/heads/main/config/series.json"
 # The VTuber database (https://github.com/dd-center/vdb); its `vtuber` entries are added last.
 VTUBERS_URL = "https://vdb.vtbs.moe/json/list.json"
@@ -297,30 +297,27 @@ def tag_names(rec: dict) -> Iterator[str]:
                 yield name.strip().casefold()
 
 
-def excluded_titles(series: list) -> frozenset[str]:
-    """norm() of every game name, title (any language) and alias in series.json."""
-    out: set[str] = set()
-    for entry in series:
-        if not isinstance(entry, dict):
-            continue
-        texts = [entry.get("game"), *(entry.get("title") or {}).values(), *(entry.get("aliases") or [])]
-        out.update(norm(t) for t in texts if isinstance(t, str))
-    out.discard("")
+def excluded_ids(series: list) -> frozenset[int]:
+    """The Bangumi subject id (`bangumi_id`) of every game in series.json; entries without
+    one (missing, 0 or not a number) are ignored."""
+    out = {_int(entry.get("bangumi_id")) for entry in series if isinstance(entry, dict)}
+    out.discard(0)
     return frozenset(out)
 
 
-def select_subjects(path: Path, exclude: frozenset[str] = frozenset()) -> dict[int, dict]:
+def select_subjects(path: Path, exclude: frozenset[int] = frozenset()) -> dict[int, dict]:
     """id -> subject record for the animation / games that carry one of TAGS, minus the
-    subjects having a title or alias that is in `exclude` (norm() forms, compared whole)."""
+    subjects whose id is in `exclude`."""
     out: dict[int, dict] = {}
     skipped: list[str] = []
     for rec in read_jsonl(path):
         if _int(rec.get("type")) not in SUBJECT_TYPES or TAGS.isdisjoint(tag_names(rec)):
             continue
-        if exclude and not exclude.isdisjoint(norm(t) for t in subject_titles(rec, None)[1]):
-            skipped.append(rec.get("name") or str(rec.get("id")))
+        sid = _int(rec.get("id"))
+        if sid in exclude:
+            skipped.append(rec.get("name") or str(sid))
             continue
-        out[_int(rec.get("id"))] = rec
+        out[sid] = rec
     if exclude:
         print(f"excluded {len(skipped)} subjects that are in series.json"
               + (f": {', '.join(skipped[:10])}{' ...' if len(skipped) > 10 else ''}" if skipped else ""))
@@ -518,7 +515,7 @@ def vtuber_names(rec: dict, s2t: Callable[[str], str] | None) -> tuple[list[str]
 # ---------------------------------------------------------------------------
 
 def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
-                exclude: frozenset[str] = frozenset(), vtubers: list[dict] = (),
+                exclude: frozenset[int] = frozenset(), vtubers: list[dict] = (),
                 english: tuple[dict[int, str], dict[str, str]] | None = None,
                 english_names: dict[str, str] | None = None) -> dict:
     subjects = select_subjects(data_dir / SUBJECTS, exclude)
@@ -615,7 +612,7 @@ def build_index(data_dir: Path, s2t: Callable[[str], str] | None = None,
 
 def main() -> None:
     try:
-        exclude = excluded_titles(fetch_series())
+        exclude = excluded_ids(fetch_series())
     except Exception as e:
         sys.exit(f"Could not fetch {SERIES_URL}: {e}")
     try:

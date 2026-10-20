@@ -17,10 +17,10 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
    `subject-characters.jsonlines` and `character.jsonlines` into `data/`, deletes the zip and
    saves `latest.json` in the project root;
 2. keeps the animation and games tagged `visual novel`, `japan` or `jrpg` (`TAGS` in `main.py`),
-   except the ones that appear in the gacha-character-scraper's
+   except the gacha games: those whose subject id is the `bangumi_id` of an entry in the
+   gacha-character-scraper's
    [`config/series.json`](https://raw.githubusercontent.com/RedDeadDepresso/gacha-character-scraper/refs/heads/main/config/series.json)
-   (fetched every run, not saved): a subject is left out when one of its names, titles or
-   aliases equals a game, title or alias there;
+   (fetched every run, not saved);
 3. gives each of their characters the earliest released of those subjects as its series (the
    subject's `date`, then the lowest id), so a game wins over its anime adaptation;
 4. reads the Japanese, Chinese and English names and aliases of the series and the characters

@@ -164,28 +164,34 @@ def test_without_opencc_there_is_no_traditional(data):
 # --- series.json exclusion -------------------------------------------------
 
 SERIES = [
-    {"game": "Final Fantasy X", "title": {"en_us": "Final Fantasy X", "ja_jp": "ファイナルファンタジーX"},
-     "aliases": ["FFX"]},
-    {"game": "Fate", "title": {"en_us": "Fate", "zh_cn": "命运/停留之夜"}, "aliases": []},
+    {"game": "Final Fantasy X", "bangumi_id": 40, "title": {"en_us": "Final Fantasy X"}, "aliases": ["FFX"]},
+    {"game": "Fate", "bangumi_id": "1", "title": {"en_us": "Fate"}, "aliases": []},
+    {"game": "No id yet", "title": {"en_us": "Fate/hollow ataraxia"}, "aliases": []},
+    {"game": "Zero id", "bangumi_id": 0, "title": {}, "aliases": []},
+    {"game": "Not a number", "bangumi_id": "abc", "title": {}, "aliases": []},
     "junk entry",
 ]
 
 
-def test_excluded_titles():
-    ex = main.excluded_titles(SERIES)
-    assert {norm("Final Fantasy X"), norm("FFX"), norm("ファイナルファンタジーX"), norm("Fate"),
-            norm("命运/停留之夜")} <= ex
-    assert "" not in ex
+def test_excluded_ids():
+    assert main.excluded_ids(SERIES) == {40, 1}
 
 
-def test_subjects_in_series_json_are_excluded_by_any_title_or_alias(data):
-    ex = main.excluded_titles(SERIES)
-    # 40 matches by name, 1 by its Chinese title; 10 ("Fate/hollow ataraxia") only shares the word "Fate".
+def test_subjects_in_series_json_are_excluded_by_bangumi_id(data):
+    ex = main.excluded_ids(SERIES)
+    # 40 and 1 are excluded by id. 10 is kept although an entry without bangumi_id has its title.
     assert sorted(main.select_subjects(data / "subject.jsonlines", ex)) == [10]
 
 
+def test_a_title_in_series_json_no_longer_excludes(data):
+    ex = main.excluded_ids([{"game": "Fate/stay night", "title": {"en_us": "Fate/stay night"},
+                             "aliases": ["Final Fantasy X"]}])
+    assert ex == frozenset()
+    assert sorted(main.select_subjects(data / "subject.jsonlines", ex)) == [1, 10, 40]
+
+
 def test_excluded_subject_does_not_claim_its_characters(data):
-    ex = main.excluded_titles([{"game": "Fate/stay night", "title": {}, "aliases": []}])
+    ex = main.excluded_ids([{"game": "Fate/stay night", "bangumi_id": 1}])
     idx = main.build_index(data, t2s_like, ex)
     assert len(idx["series"]) == 2                           # subjects 10 and 40
     rin = next(c for c in idx["chars"] if c[2] == 5000)
@@ -193,7 +199,7 @@ def test_excluded_subject_does_not_claim_its_characters(data):
 
 
 def test_character_only_in_excluded_subjects_is_dropped(data):
-    ex = main.excluded_titles([{"game": "ファイナルファンタジーX", "title": {}, "aliases": []}])
+    ex = main.excluded_ids([{"game": "ファイナルファンタジーX", "bangumi_id": 40}])
     idx = main.build_index(data, t2s_like, ex)
     assert 777 not in {c[2] for c in idx["chars"]}           # Tidus was only in subject 40
 
