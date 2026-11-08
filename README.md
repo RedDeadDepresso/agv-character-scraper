@@ -12,10 +12,10 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
 (`bgm-tv-wiki` for the infoboxes; `OpenCC` is optional, for Traditional Chinese). The script
 
 1. fetches the Archive's [`aux/latest.json`](https://raw.githubusercontent.com/bangumi/Archive/refs/heads/master/aux/latest.json).
-   If it is the same as `latest.json` in the project root the download is skipped; otherwise it
+   If it is the same as `config/latest.json` the download is skipped; otherwise it
    downloads the release zip, verifies its sha256, extracts only `subject.jsonlines`,
    `subject-characters.jsonlines` and `character.jsonlines` into `data/`, deletes the zip and
-   saves `latest.json` in the project root;
+   saves `config/latest.json`;
 2. keeps the animation and games tagged `visual novel`, `japan` or `jrpg` (`TAGS` in `main.py`),
    except the gacha games: those whose subject id is the `bangumi_id` of an entry in the
    gacha-character-scraper's
@@ -31,7 +31,7 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
    that lists the series' Bangumi subject id (`sites`), or else the one whose original title
    equals the series' Japanese title. bangumi-data only lists anime, so games are left out of this step. `data/data.json` is downloaded again
    only when the repo's latest commit differs from the one saved in
-   `bangumi_data_last_commit.txt` (project root) or the file is missing;
+   `config/bangumi_data_last_commit.txt` or the file is missing;
 5. gives the characters Bangumi has no English name for one from the
    [MyAnimeList characters dataset](https://www.kaggle.com/datasets/syahrulapriansyah2/anime-characters):
    a row whose `alternate_name` (Japanese) equals the character's Japanese name provides the
@@ -46,20 +46,20 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
    `id`, `name` and `birthday` of every VTuber, newest debut first). The first run fetches the whole
    list, later runs only the pages up to the first VTuber already saved. A VTuber with an English
    name gets the birthday of the Amatsukaze VTuber with the same `name` (compared with `norm()`);
-7. writes `agv_character_index.json`; a character whose Bangumi infobox has a readable birthday (`生日`,
+7. writes `indices/agv.json`; a character whose Bangumi infobox has a readable birthday (`生日`,
    e.g. `9月28日`, `9/28` or `2000-09-28`; the year is ignored) gets its month and day appended to its entry.
 
 The format is described at the top of `main.py`.
 
 ## Published file
 
-`agv_character_index.json` is served by GitHub Pages:
+`indices/agv.json` is served by GitHub Pages:
 
-    https://reddeaddepresso.github.io/agv-character-scraper/agv_character_index.json
+    https://reddeaddepresso.github.io/agv-character-scraper/indices/agv.json
 
 KKAFIO checks `https://api.github.com/repos/RedDeadDepresso/agv-character-scraper/commits` and
 downloads the file again only when the latest commit changed, so **commit the new
-`agv_character_index.json` after every run**.
+`indices/agv.json` after every run**.
 
 ## Keep in sync with KKAFIO
 

@@ -1,13 +1,13 @@
 """
-main.py — Build agv_character_index.json (the character / series index KKAFIO uses) from
+main.py — Build indices/agv.json (the character / series index KKAFIO uses) from
 the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no arguments:
 
     python main.py
 
-1. Fetch the Archive's aux/latest.json. If it equals ./latest.json (and the extracted files
+1. Fetch the Archive's aux/latest.json. If it equals ./config/latest.json (and the extracted files
    are in data/) nothing is downloaded; otherwise the release zip it points to
    (`browser_download_url`) is downloaded, checked against its sha256 digest, only the files
-   this script needs are extracted into data/, the zip is deleted and latest.json is saved
+   this script needs are extracted into data/, the zip is deleted and config/latest.json is saved
    in the project root.
 2. Subjects (subject.jsonlines): keep animation (type 2) and games (type 4) that carry one
    of TAGS ("visual novel", "japan", "jrpg"; Chinese spellings too), in `tags` or `meta_tags`.
@@ -26,7 +26,7 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
    original title equals its Japanese title (compared with norm()); bangumi-data lists anime
    only, so this is done for animation subjects, not games. If that finds none,
    the longest Latin-script alias of the subject is used. data/data.json is downloaded from BANGUMI_DATA_URL when the latest commit of the
-   bangumi-data repo differs from the one in bangumi_data_last_commit.txt (project root) or
+   bangumi-data repo differs from the one in config/bangumi_data_last_commit.txt or
    the file is missing. The English title is also an alias of the series.
 6. English character names: a character with no English name gets the one of the MAL
    dataset's row whose `alternate_name` (Japanese) equals its Japanese name (compared with
@@ -39,7 +39,7 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
    `extra` included). The birthday of a VTuber with an English name is found on Amatsukaze by
    that name (norm(); the list is AMATSUKAZE_URL, saved in data/amatsukaze_vtubers.json and
    extended on the next run until the first saved VTuber).
-8. Write agv_character_index.json (version 1):
+8. Write indices/agv.json (version 1):
 
   {
     "version": 1,
@@ -81,9 +81,9 @@ from bgm_tv_wiki import try_parse
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"                      # the extracted .jsonlines files
-LATEST_FILE = ROOT / "latest.json"           # the release the files in data/ come from
-BANGUMI_COMMIT_FILE = ROOT / "bangumi_data_last_commit.txt"   # commit data/data.json comes from
-OUTPUT = ROOT / "agv_character_index.json"
+LATEST_FILE = ROOT / "config" / "latest.json"           # the release the files in data/ come from
+BANGUMI_COMMIT_FILE = ROOT / "config" / "bangumi_data_last_commit.txt"   # commit data/data.json comes from
+OUTPUT = ROOT / "indices" / "agv.json"
 
 LATEST_URL = "https://raw.githubusercontent.com/bangumi/Archive/refs/heads/master/aux/latest.json"
 # The gacha games the other scraper covers; the subjects with their `bangumi_id` are left out.
@@ -303,6 +303,7 @@ def update_bangumi_data() -> Path:
             os.replace(part, path)
         finally:
             part.unlink(missing_ok=True)
+        BANGUMI_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         BANGUMI_COMMIT_FILE.write_text(latest, encoding="utf-8")
     except Exception as e:
         if not path.exists():
@@ -343,6 +344,7 @@ def update_data() -> None:
         extract_needed(archive, DATA_DIR)
     finally:
         archive.unlink(missing_ok=True)
+    LATEST_FILE.parent.mkdir(parents=True, exist_ok=True)
     LATEST_FILE.write_text(json.dumps(remote, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -776,6 +778,7 @@ def main() -> None:
     english = english_titles(json.loads(update_bangumi_data().read_text(encoding="utf-8")).get("items", []))
     english_names = read_english_names(update_mal_dataset())
     index = build_index(DATA_DIR, s2t, exclude, vtubers, english, english_names, birthdays)
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"wrote {OUTPUT} ({OUTPUT.stat().st_size / 1e6:.2f} MB)")
 
