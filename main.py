@@ -25,9 +25,9 @@ the Bangumi Archive (https://github.com/bangumi/Archive). Run it with no argumen
    the bangumi-data entry that has its Bangumi subject id (`sites`), or else the entry whose
    original title equals its Japanese title (compared with norm()); bangumi-data lists anime
    only, so this is done for animation subjects, not games. If that finds none,
-   the longest Latin-script alias of the subject is used. data/data.json is downloaded from BANGUMI_DATA_URL when the latest commit of the
-   bangumi-data repo differs from the one in config/bangumi_data_last_commit.txt or
-   the file is missing. The English title is also an alias of the series.
+   the longest Latin-script alias of the subject is used. data/data.json is downloaded from BANGUMI_DATA_URL unless the server
+   confirms (HTTP 304) that its ETag still equals the one in config/bangumi_data_etag.txt; a missing file
+   is always downloaded. The English title is also an alias of the series.
 6. English character names: a character with no English name gets the one of the MAL
    dataset's row whose `alternate_name` (Japanese) equals its Japanese name (compared with
    norm(), both orders of a two-part name); names shared by differently named rows are not
@@ -70,6 +70,7 @@ import re
 import sys
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -82,7 +83,7 @@ from bgm_tv_wiki import try_parse
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"                      # the extracted .jsonlines files
 LATEST_FILE = ROOT / "config" / "latest.json"           # the release the files in data/ come from
-BANGUMI_COMMIT_FILE = ROOT / "config" / "bangumi_data_last_commit.txt"   # commit data/data.json comes from
+BANGUMI_ETAG_FILE = ROOT / "config" / "bangumi_data_etag.txt"   # ETag of the data/data.json download
 OUTPUT = ROOT / "indices" / "agv.json"
 
 LATEST_URL = "https://raw.githubusercontent.com/bangumi/Archive/refs/heads/master/aux/latest.json"
@@ -100,7 +101,6 @@ AMATSUKAZE_LIMIT = 50                         # VTubers per page
 AMATSUKAZE_DELAY = 0.3                        # seconds between two pages
 # bangumi-data (https://github.com/bangumi-data/bangumi-data): English titles for the series
 # Bangumi has none for. data.json is downloaded again when the repo's latest commit changes.
-BANGUMI_DATA_COMMITS_URL = "https://api.github.com/repos/bangumi-data/bangumi-data/commits?sha=master&per_page=1"
 BANGUMI_DATA_URL = "https://raw.githubusercontent.com/bangumi-data/bangumi-data/refs/heads/master/dist/data.json"
 BANGUMI_DATA_NAME = "data.json"              # in DATA_DIR
 # The Kaggle MyAnimeList characters dataset (https://www.kaggle.com/datasets/syahrulapriansyah2/anime-characters):
@@ -241,6 +241,25 @@ def download(url: str, dest: Path, digest: str = "") -> None:
         raise ValueError(f"sha256 mismatch for {dest.name}: expected {expected}, got {sha.hexdigest()}")
 
 
+def download_if_changed(url: str, dest: Path, etag: str = "") -> str | None:
+    """Stream `url` to `dest` unless the server says it still has `etag` (HTTP 304).
+    Returns the new ETag ("" if the server sent none), or None when nothing changed."""
+    req = urllib.request.Request(url, headers={"User-Agent": "agv-character-scraper"})
+    if etag:
+        req.add_header("If-None-Match", etag)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r, dest.open("wb") as f:
+            while chunk := r.read(1 << 20):
+                f.write(chunk)
+            return r.headers.get("ETag", "")
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            dest.unlink(missing_ok=True)
+            return None
+        raise
+
+
 def extract_needed(archive: Path, data_dir: Path, names: tuple[str, ...] = NEEDED) -> None:
     """Extract only `names` from the zip (by file name, wherever it sits in the archive)."""
     with zipfile.ZipFile(archive) as z:
@@ -279,35 +298,38 @@ def update_mal_dataset() -> Path:
 
 
 def update_bangumi_data() -> Path:
-    """Make data/data.json the one of bangumi-data's latest commit and return its path.
+    """Make data/data.json the newest bangumi-data release and return its path.
 
-    The commit the file was downloaded at is kept in BANGUMI_COMMIT_FILE; the file is
-    downloaded again when the latest commit differs or the file is missing. If the commit
-    can't be checked or the download fails, an existing file is used."""
+    The ETag of the downloaded file is kept in BANGUMI_ETAG_FILE and sent back as
+    If-None-Match: the server answers 304 (nothing is downloaded) while the file is unchanged.
+    The file is downloaded unconditionally when it is missing. If the check or the download
+    fails, an existing file is used."""
     path = DATA_DIR / BANGUMI_DATA_NAME
     try:
-        latest = fetch_json(BANGUMI_DATA_COMMITS_URL)[0]["sha"].strip()
         try:
-            saved = BANGUMI_COMMIT_FILE.read_text(encoding="utf-8").strip()
+            saved = BANGUMI_ETAG_FILE.read_text(encoding="utf-8").strip() if path.exists() else ""
         except OSError:
             saved = ""
-        if saved == latest and path.exists():
-            print(f"bangumi-data is up to date ({latest[:7]}) — skipping the download.")
-            return path
-        print(f"Downloading bangumi-data data.json ({latest[:7]})...")
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         try:
-            download(BANGUMI_DATA_URL, part)
+            etag = download_if_changed(BANGUMI_DATA_URL, part, saved)
+            if etag is None:
+                print("bangumi-data is up to date — skipping the download.")
+                return path
+            print("Downloaded the new bangumi-data data.json.")
             json.loads(part.read_text(encoding="utf-8"))          # reject a truncated / non-JSON file
             os.replace(part, path)
         finally:
             part.unlink(missing_ok=True)
-        BANGUMI_COMMIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        BANGUMI_COMMIT_FILE.write_text(latest, encoding="utf-8")
+        if etag:
+            BANGUMI_ETAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            BANGUMI_ETAG_FILE.write_text(etag, encoding="utf-8")
+        else:
+            BANGUMI_ETAG_FILE.unlink(missing_ok=True)             # no ETag: download again next time
     except Exception as e:
         if not path.exists():
-            sys.exit(f"Could not get bangumi-data ({BANGUMI_DATA_COMMITS_URL}): {e}")
+            sys.exit(f"Could not get bangumi-data ({BANGUMI_DATA_URL}): {e}")
         print(f"Could not update bangumi-data ({e}) — using the data.json already in {DATA_DIR}.")
     return path
 

@@ -466,66 +466,72 @@ def test_mal_dataset_failures_stop_and_leave_nothing_behind(kaggle):
     assert list(main.DATA_DIR.iterdir()) == []                       # no archive, no .part, no csv
 
 
-# --- data.json download / commit check --------------------------------------
+# --- data.json download / ETag check ----------------------------------------
 
 @pytest.fixture
 def bdata(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DATA_DIR", tmp_path / "data")
-    monkeypatch.setattr(main, "BANGUMI_COMMIT_FILE", tmp_path / "bangumi_data_last_commit.txt")
-    st = {"sha": "aaa111bbb", "downloads": 0}
+    monkeypatch.setattr(main, "BANGUMI_ETAG_FILE", tmp_path / "bangumi_data_etag.txt")
+    st = {"etag": '"aaa111"', "downloads": 0, "sent": []}
 
-    def fake_json(url):
-        assert url == main.BANGUMI_DATA_COMMITS_URL
-        if st["sha"] is None:
-            raise OSError("offline")
-        return [{"sha": st["sha"]}]
-
-    def fake_download(url, dest, digest=""):
+    def fake_download(url, dest, etag=""):
         assert url == main.BANGUMI_DATA_URL
+        st["sent"].append(etag)
+        if st["etag"] is None:
+            raise OSError("offline")
+        if etag and etag == st["etag"]:
+            return None                                  # 304 Not Modified
         st["downloads"] += 1
         dest.write_text(json.dumps(BANGUMI_DATA), encoding="utf-8")
+        return st["etag"]
 
-    monkeypatch.setattr(main, "fetch_json", fake_json)
-    monkeypatch.setattr(main, "download", fake_download)
+    monkeypatch.setattr(main, "download_if_changed", fake_download)
     return st
 
 
-def test_bangumi_data_downloaded_and_commit_saved_in_root(bdata):
+def test_bangumi_data_downloaded_and_etag_saved(bdata):
     path = main.update_bangumi_data()
     assert path == main.DATA_DIR / "data.json" and json.loads(path.read_text(encoding="utf-8")) == BANGUMI_DATA
-    assert main.BANGUMI_COMMIT_FILE.read_text(encoding="utf-8") == "aaa111bbb"
+    assert main.BANGUMI_ETAG_FILE.read_text(encoding="utf-8") == '"aaa111"'
     assert [p.name for p in main.DATA_DIR.iterdir()] == ["data.json"]                # no .part left
 
 
-def test_bangumi_data_skipped_unless_commit_changed_or_file_missing(bdata):
+def test_bangumi_data_skipped_unless_etag_changed_or_file_missing(bdata):
     main.update_bangumi_data()
     main.update_bangumi_data()
-    assert bdata["downloads"] == 1                       # same commit
-    bdata["sha"] = "ccc222ddd"
+    assert bdata["downloads"] == 1 and bdata["sent"][-1] == '"aaa111"'               # 304: same ETag
+    bdata["etag"] = '"ccc222"'
     main.update_bangumi_data()
-    assert bdata["downloads"] == 2 and main.BANGUMI_COMMIT_FILE.read_text(encoding="utf-8") == "ccc222ddd"
+    assert bdata["downloads"] == 2 and main.BANGUMI_ETAG_FILE.read_text(encoding="utf-8") == '"ccc222"'
     (main.DATA_DIR / "data.json").unlink()
     main.update_bangumi_data()
-    assert bdata["downloads"] == 3                       # same commit, but the file was gone
+    assert bdata["downloads"] == 3 and bdata["sent"][-1] == ""                       # file gone: unconditional
+
+
+def test_bangumi_data_without_an_etag_is_downloaded_every_time(bdata):
+    bdata["etag"] = ""
+    main.update_bangumi_data()
+    main.update_bangumi_data()
+    assert bdata["downloads"] == 2 and not main.BANGUMI_ETAG_FILE.exists()
 
 
 def test_bangumi_data_offline_uses_the_existing_file_or_stops(bdata):
-    bdata["sha"] = None
+    bdata["etag"] = None
     with pytest.raises(SystemExit):
         main.update_bangumi_data()                       # nothing to fall back on
-    bdata["sha"] = "aaa111bbb"
+    bdata["etag"] = '"aaa111"'
     main.update_bangumi_data()
-    bdata["sha"] = None
+    bdata["etag"] = None
     assert main.update_bangumi_data().exists() and bdata["downloads"] == 1
 
 
-def test_bad_download_keeps_the_old_file_and_commit(bdata, monkeypatch):
+def test_bad_download_keeps_the_old_file_and_etag(bdata, monkeypatch):
     main.update_bangumi_data()
-    bdata["sha"] = "ccc222ddd"
-    monkeypatch.setattr(main, "download", lambda url, dest, digest="": dest.write_text("<html>", encoding="utf-8"))
+    monkeypatch.setattr(main, "download_if_changed",
+                        lambda url, dest, etag="": dest.write_text("<html>", encoding="utf-8") or '"ccc222"')
     path = main.update_bangumi_data()                    # warns, keeps using the old file
     assert json.loads(path.read_text(encoding="utf-8")) == BANGUMI_DATA
-    assert main.BANGUMI_COMMIT_FILE.read_text(encoding="utf-8") == "aaa111bbb"      # retried next run
+    assert main.BANGUMI_ETAG_FILE.read_text(encoding="utf-8") == '"aaa111"'          # retried next run
     assert not (main.DATA_DIR / "data.json.part").exists()
 
 

@@ -30,8 +30,8 @@ No arguments. Install the dependencies first with `pip install -r requirements.t
    [`dist/data.json`](https://raw.githubusercontent.com/bangumi-data/bangumi-data/refs/heads/master/dist/data.json)
    that lists the series' Bangumi subject id (`sites`), or else the one whose original title
    equals the series' Japanese title. bangumi-data only lists anime, so games are left out of this step. `data/data.json` is downloaded again
-   only when the repo's latest commit differs from the one saved in
-   `config/bangumi_data_last_commit.txt` or the file is missing;
+   only when its ETag differs from the one saved in `config/bangumi_data_etag.txt`
+   (the request is conditional, the server answers 304 when nothing changed) or the file is missing;
 5. gives the characters Bangumi has no English name for one from the
    [MyAnimeList characters dataset](https://www.kaggle.com/datasets/syahrulapriansyah2/anime-characters):
    a row whose `alternate_name` (Japanese) equals the character's Japanese name provides the
